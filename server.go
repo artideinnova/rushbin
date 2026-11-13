@@ -445,6 +445,9 @@ func (s *Server) csp() string {
 func (s *Server) guard(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// Every page and file is checked again on each visit, so after an update nobody sees an old version; the
+		// handlers that must never be kept (previews, streams) say so themselves.
+		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", s.csp())
 		// The app's sign-in and pairing set no cookie and answer only the caller, so they need neither.

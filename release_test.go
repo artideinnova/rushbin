@@ -225,3 +225,16 @@ func TestUpdatesFrom(t *testing.T) {
 		}
 	}
 }
+
+// Every page and file of the site tells browsers to check it again, so an update shows at once.
+func TestNoCache(t *testing.T) {
+	s := &Server{}
+	site := httptest.NewServer(s.guard(s.routes()))
+	defer site.Close()
+	for _, p := range []string{"/login", "/i18n.js", "/logo.svg", "/robots.txt"} {
+		res, err := http.Get(site.URL + p)
+		if err != nil || res.StatusCode != 200 || res.Header.Get("Cache-Control") != "no-cache" {
+			t.Errorf("%s: %v %v %q", p, res.StatusCode, err, res.Header.Get("Cache-Control"))
+		}
+	}
+}
