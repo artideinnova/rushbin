@@ -1,0 +1,2 @@
+"NSRemovableVolumesUsageDescription" = "rushbinは外部ドライブを読み取って、そこにある映像のカタログを作成します。ファイルをrushbinのゴミ箱に移動する場合を除き、ドライブに書き込むことはありません。";
+"NSNetworkVolumesUsageDescription" = "rushbinはネットワークドライブを読み取って、そこにある映像のカタログを作成します。ファイルをrushbinのゴミ箱に移動する場合を除き、ドライブに書き込むことはありません。";

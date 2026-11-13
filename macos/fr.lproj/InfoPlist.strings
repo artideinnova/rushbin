@@ -1,0 +1,2 @@
+"NSRemovableVolumesUsageDescription" = "rushbin lit vos disques externes pour cataloguer les vidéos qu’ils contiennent. Il n’y écrit jamais, sauf si vous déplacez des fichiers vers sa corbeille.";
+"NSNetworkVolumesUsageDescription" = "rushbin lit les disques réseau pour cataloguer les vidéos qu’ils contiennent. Il n’y écrit jamais, sauf si vous déplacez des fichiers vers sa corbeille.";

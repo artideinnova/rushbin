@@ -1,0 +1,7 @@
+deploy/.env
+deploy/backup.env
+deploy/mail.env
+deploy/release.env
+deploy/storage.env
+/rushbin
+/rushbin.exe

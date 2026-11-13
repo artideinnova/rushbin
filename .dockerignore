@@ -1,0 +1,5 @@
+.git
+deploy/*.env
+macos
+*.md
+!LICENSE.md

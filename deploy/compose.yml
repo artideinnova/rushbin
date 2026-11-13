@@ -1,0 +1,62 @@
+# The team site on one server: rushbin, Postgres and Caddy (HTTPS certificates by itself).
+# Next to this file, a .env with:
+#   RUSHBIN_DOMAIN=rushbin.example.com      (its DNS pointing to this server)
+#   POSTGRES_PASSWORD=...                   (letters and digits only, for example: openssl rand -hex 24)
+#   RUSHBIN_APP_PASSWORD=...                (another one, 16 or more characters: openssl rand -hex 32)
+# Then: docker compose up -d --build
+# The first team: docker compose exec rushbin /rushbin setup-link prints the setup link, on this terminal only.
+# Another team (prints the invite link of its owner): docker compose exec rushbin /rushbin newteam "Team name" owner@email
+# The bucket for the videos: storage.env (docs/self-host.md); the database copies: backup.env, on the server only.
+# Nightly database copy, on the server:
+#   sudo cp systemd/rushbin-backup.* /etc/systemd/system/ && sudo systemctl enable --now rushbin-backup.timer
+# Weekly restore test of that copy: sudo cp systemd/rushbin-restore-test.* /etc/systemd/system/ && sudo systemctl enable --now rushbin-restore-test.timer
+x-logging: &logging # logs rotated by size, at most 50 MB per service (the privacy policy says so); json-file has no time limit
+  driver: json-file
+  options: { max-size: 10m, max-file: "5" }
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg17-trixie # Postgres 17 with pgvector; trixie like the postgres:17 it replaced (same glibc collation)
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env}
+      POSTGRES_DB: rushbin
+    volumes: [db:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "postgres"], interval: 2s, retries: 30 }
+    restart: unless-stopped
+    logging: *logging
+  rushbin:
+    build: ..
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/rushbin?sslmode=disable
+      RUSHBIN_APP_PASSWORD: ${RUSHBIN_APP_PASSWORD:?set it in .env} # the teams' queries sign in as rushbin_app with it
+      RUSHBIN_PROXY: caddy # the only peer whose X-Forwarded-For is believed (the sign-in limits count the address it saw)
+      RUSHBIN_URL: https://${RUSHBIN_DOMAIN}
+      RUSHBIN_TEXT_URL: http://text:8000
+      RUSHBIN_TIDY_CAP: ${RUSHBIN_TIDY_CAP:-} # tidy-ups with AI per team per month, 20 when not set
+      RUSHBIN_UPDATES_FROM: ${RUSHBIN_UPDATES_FROM:-} # without releases of its own: whose to pass on, rushbin.io when not set, off for none
+    env_file: # the store for the proxies (RUSHBIN_S3_*) and the releases (RUSHBIN_RELEASES_S3_*, read only), readable by root
+      # only; without it, no videos for the team
+      - path: storage.env
+        required: false
+      - path: anthropic.env # RUSHBIN_ANTHROPIC_KEY, or RUSHBIN_AI_*: Tidy up with AI through the site's AI; without it, each Mac uses its own
+        required: false
+      - path: mail.env # RUSHBIN_SMTP_* and RUSHBIN_MAIL_FROM: the site's email through your SMTP server; without it, owners send the links
+        required: false
+    volumes: [data:/var/lib/rushbin]
+    depends_on: { db: { condition: service_healthy } }
+    restart: unless-stopped
+    logging: *logging
+  text: # the words of a search, as a SigLIP 2 vector; not published outside
+    build: text
+    restart: unless-stopped
+    logging: *logging
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    environment:
+      RUSHBIN_DOMAIN: ${RUSHBIN_DOMAIN:?set it in .env}
+      RUSHBIN_ALIASES: ${RUSHBIN_ALIASES:-} # other names, space separated, sent to RUSHBIN_DOMAIN (Caddyfile)
+    volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro, caddy:/data]
+    depends_on: [rushbin]
+    restart: unless-stopped
+    logging: *logging
+volumes: { db: {}, data: {}, caddy: {} }

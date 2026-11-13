@@ -1,0 +1,15 @@
+# RUSHBIN_ALIASES: other names of the site (a former domain, www.), each with its DNS here. Pages there move to
+# RUSHBIN_DOMAIN; the apps' paths stay answered there, for apps that still use the former name.
+{$RUSHBIN_DOMAIN} {$RUSHBIN_ALIASES} {
+	@alias {
+		not host {$RUSHBIN_DOMAIN}
+		not path /api/* /appcast.xml /download/* /health
+	}
+	redir @alias https://{$RUSHBIN_DOMAIN}{uri} permanent
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000" # HTTPS only from the first visit on
+	request_body {
+		max_size 1GB
+	}
+	reverse_proxy rushbin:8080
+}

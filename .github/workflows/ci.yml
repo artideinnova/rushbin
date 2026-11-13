@@ -1,0 +1,131 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg17-trixie
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      RUSHBIN_TEST_DB: postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: FFmpeg 9.0 LGPL # the same build as the Windows job; apt's mirrors hung this job twice
+        run: |
+          z=ffmpeg-n9.0-latest-linux64-lgpl-9.0
+          curl -fsSL -o ff.tar.xz "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$z.tar.xz"
+          echo "SHA-256 of $z.tar.xz: $(sha256sum ff.tar.xz | cut -d' ' -f1)"
+          tar -xJf ff.tar.xz && echo "$PWD/$z/bin" >> "$GITHUB_PATH"
+      - name: SigLIP 2 tokenizer # for TestTokenizer, pinned to the commit the Mac's text model was converted from
+        run: |
+          curl -fsSL -o tokenizer.model https://huggingface.co/google/siglip2-base-patch16-256/resolve/3f9f96cb90da5dbc758b01813f2f6f1aee24c1ab/tokenizer.model
+          echo "61a7b147390c64585d6c3543dd6fc636906c9af3865a5548f27f31aee1d4c8e2  tokenizer.model" | sha256sum -c
+          echo "RUSHBIN_SIGLIP_TOKENIZER=$PWD/tokenizer.model" >> "$GITHUB_ENV"
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -count=1 -v ./...
+
+  # Windows: the engine is the app (rushbin.exe opens the page in the browser). The package bundles the
+  # LGPL build of FFmpeg 9.0, like the Mac app, and search by content: whisper-cli (whisper.cpp with Vulkan,
+  # any GPU, or the CPU) and rushbin-vision.exe (windows/vision: SigLIP 2 on DirectML or the CPU, Windows OCR).
+  # Not signed yet: Windows warns on first start (SmartScreen). The runner has no GPU: the tests run on the CPU.
+  windows:
+    runs-on: windows-latest
+    env:
+      VULKAN_VERSION: 1.4.357.0
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: FFmpeg 9.0 LGPL
+        run: |
+          $z = "ffmpeg-n9.0-latest-win64-lgpl-9.0"
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$z.zip" -OutFile ff.zip
+          "SHA-256 of $z.zip: $((Get-FileHash ff.zip).Hash)"
+          Expand-Archive ff.zip -DestinationPath ff
+          "$PWD\ff\$z\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - run: ffmpeg -hide_banner -encoders | Select-String h264
+      - name: Vulkan SDK (shaders and headers for whisper.cpp; at run time the GPU driver's Vulkan is used)
+        run: |
+          curl.exe -sSfLo "$env:RUNNER_TEMP\vk.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & "$env:RUNNER_TEMP\vk.exe" --accept-licenses --default-answer --confirm-command install
+          "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "C:\VulkanSDK\$env:VULKAN_VERSION\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      # The same whisper.cpp as macos/build-whisper.sh. Backends are DLLs loaded at run time: Vulkan when a GPU
+      # has it, else the CPU variant that fits the processor.
+      - name: whisper.cpp v1.9.5
+        run: |
+          git clone -q --depth 1 --branch v1.9.5 https://github.com/ggml-org/whisper.cpp wc
+          if ((git -C wc rev-parse HEAD) -ne "d1be6fde11ac6e0407606b4e42fe72d34add8037") { throw "whisper.cpp v1.9.5 is not commit d1be6fde" }
+          cmake -S wc -B wb -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DBUILD_SHARED_LIBS=ON `
+            -DGGML_NATIVE=OFF -DWHISPER_SDL2=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF
+          if ($LASTEXITCODE) { exit 1 }
+          cmake --build wb --config Release --parallel
+          if ($LASTEXITCODE) { exit 1 }
+      - name: rushbin-vision
+        run: dotnet publish windows/vision -c Release -o vis
+      - name: Package
+        run: |
+          # A tag like v1.2.0 builds version 1.2.0; anything else is "dev", which never asks to update.
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { 'dev' }
+          go build -trimpath -ldflags "-s -w -X main.version=$version" -o dist/rushbin.exe .
+          if ($LASTEXITCODE) { exit 1 }
+          Copy-Item ff/*/bin/ffmpeg.exe, ff/*/bin/ffprobe.exe dist/
+          Copy-Item ff/*/LICENSE.txt dist/FFMPEG-LICENSE.txt
+          Copy-Item wb/bin/Release/whisper-cli.exe, wb/bin/Release/whisper.dll, wb/bin/Release/ggml*.dll dist/
+          Copy-Item wc/LICENSE dist/WHISPER-LICENSE.txt
+          Copy-Item vis/rushbin-vision.exe, vis/onnxruntime.dll, vis/DirectML.dll dist/
+          $nu = (dotnet nuget locals global-packages --list) -replace '^global-packages: ', ''
+          Copy-Item "$nu/microsoft.ml.onnxruntime.directml/1.24.4/LICENSE" dist/ONNXRUNTIME-LICENSE.txt
+          Copy-Item "$nu/microsoft.ml.onnxruntime.directml/1.24.4/ThirdPartyNotices.txt" dist/ONNXRUNTIME-THIRD-PARTY-NOTICES.txt
+          Copy-Item "$nu/microsoft.ai.directml/1.15.4/LICENSE.txt" dist/DIRECTML-LICENSE.txt
+          Copy-Item "$nu/microsoft.ai.directml/1.15.4/ThirdPartyNotices.txt" dist/DIRECTML-THIRD-PARTY-NOTICES.txt
+          Copy-Item macos/siglip/SIGLIP-LICENSE.txt, LICENSE.md, NOTICE.md dist/
+          # The licenses of the Go standard library and the Go modules inside rushbin.exe, as on the Mac (macos/build.sh).
+          & {
+            "== Go standard library`n"; Get-Content "$(go env GOROOT)/LICENSE" -Raw
+            go version -m dist/rushbin.exe | Select-String '^\s+dep\s+(\S+)' | ForEach-Object {
+              $m = $_.Matches[0].Groups[1].Value; "== $m`n"; Get-Content "$(go list -m -f '{{.Dir}}' $m)/LICENSE" -Raw
+            }
+          } | Out-File -Encoding utf8 dist/GO-LICENSES.txt
+          if (-not (Select-String -Quiet 'jackc/pgx' dist/GO-LICENSES.txt)) { exit 1 }
+          # The Visual C++ runtime (and OpenMP, for whisper.cpp's CPU backends) that onnxruntime.dll and whisper.cpp
+          # need, next to them: Windows may not have it.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $crt = (Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory | Select-Object -Last 1).FullName
+          $omp = (Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.OpenMP" -Directory | Select-Object -Last 1).FullName
+          Copy-Item "$crt\msvcp140.dll", "$crt\msvcp140_1.dll", "$crt\vcruntime140.dll", "$crt\vcruntime140_1.dll", "$omp\vcomp140.dll" dist/
+          $dumpbin = (Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -Last 1).FullName
+          Get-ChildItem dist -Include *.exe, *.dll -Recurse | ForEach-Object {
+            "$($_.Name) ($($_.Length) bytes) needs: " + ((& $dumpbin /nologo /dependents $_.FullName | Select-String '^\s+\S+\.dll$' | ForEach-Object { $_.Line.Trim() }) -join ', ')
+          }
+          "$PWD\dist" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Models for the speech test (Whisper tiny and the voice detector)
+        run: |
+          curl.exe -sSfLo tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          curl.exe -sSfLo silero.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
+      - run: go vet ./...
+      # The tests run the packaged whisper-cli and rushbin-vision (dist is on the PATH).
+      - run: go test -count=1 -v ./...
+        env:
+          RUSHBIN_SPEECH_MODELS: ${{ github.workspace }}\tiny.bin;${{ github.workspace }}\silero.bin
+          RUSHBIN_SPEECH_SAMPLE: ${{ github.workspace }}\wc\samples\jfk.wav
+          RUSHBIN_SPEECH_SAYS: ask not
+          RUSHBIN_VISION: ${{ github.workspace }}\dist\rushbin-vision.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rushbin-windows
+          path: dist

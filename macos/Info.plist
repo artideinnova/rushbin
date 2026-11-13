@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>studio.artide.rushbin</string>
+	<key>CFBundleName</key>
+	<string>rushbin</string>
+	<key>CFBundleDisplayName</key>
+	<string>rushbin</string>
+	<key>CFBundleExecutable</key>
+	<string>rushbin</string>
+	<!-- The languages of the shell (macos/*.lproj) and of the page (web/i18n): declared, because the page is
+	     translated by hand, and with English the development language, so that an English Mac gets English. -->
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>de</string>
+		<string>es</string>
+		<string>fr</string>
+		<string>it</string>
+		<string>ja</string>
+		<string>pt-BR</string>
+	</array>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.video</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright 2026 Artide Innova SRL. FSL-1.1-ALv2.</string>
+	<!-- rushbin://connect?site=...&code=...: "Open in rushbin" on a team site (macos/main.swift) -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>studio.artide.rushbin.connect</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>rushbin</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>rushbin reads your external drives to catalog the footage on them. It never writes to them unless you move files to its trash.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>rushbin reads network drives to catalog the footage on them. It never writes to them unless you move files to its trash.</string>
+	<!-- Sparkle: the public half of the EdDSA key in the releasing Mac's Keychain ; checks
+	     every 6 hours from the feed the engine gives (macos/main.swift), downloads and installs on quit. -->
+	<key>SUPublicEDKey</key>
+	<string>F6uQHsWE96/Pa+fSpUx0qi8MIuyAcbhHHhJesmxel7g=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>21600</integer>
+</dict>
+</plist>

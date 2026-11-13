@@ -1,0 +1,2 @@
+"NSRemovableVolumesUsageDescription" = "rushbin liest deine externen Laufwerke, um das Material darauf zu katalogisieren. Es schreibt nie darauf, außer wenn du Dateien in seinen Papierkorb verschiebst.";
+"NSNetworkVolumesUsageDescription" = "rushbin liest Netzwerklaufwerke, um das Material darauf zu katalogisieren. Es schreibt nie darauf, außer wenn du Dateien in seinen Papierkorb verschiebst.";
