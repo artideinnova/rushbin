@@ -8,9 +8,9 @@ competing commercial product or service, and each version becomes Apache 2.0 two
 
 - **Bugs:** open an issue with the bug form. Security problems never go in an issue: see [SECURITY.md](SECURITY.md).
 - **Changes bigger than a fix:** open an issue first and say what you want to change and why, so no work is wasted.
-- **The contributor agreement:** your first pull request asks you to sign [the CLA](CLA.md), once, with a click.
-  It lets Artide ship your change in every rushbin it distributes, including the hosted site; you keep the
-  copyright of your work.
+- **The contributor agreement:** before we merge your first pull request we ask you to sign a contributor license
+  agreement, once. It lets Artide ship your change in every rushbin it distributes, including the hosted site; you
+  keep the copyright of your work.
 
 ## Build and test
 
