@@ -230,14 +230,21 @@
   .dupe ul { list-style: none; margin: 4px 0 0; padding: 0; color: var(--ink-2); font-size: 12.5px; }
   .dupe li { overflow-wrap: anywhere; }
   .dupe li strong { color: var(--ink); font-weight: 600; margin-right: 6px; }
+  .cons { margin: -6px 0 16px; font-size: 13px; color: var(--ink-2); max-width: 760px; }
+  .projmove { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin: 4px 0 16px; }
+  .projmove label { display: grid; gap: 4px; font-size: 12px; color: var(--ink-3); }
+  .projmove input { height: 40px; min-width: 260px; padding: 0 14px; border-radius: 12px; border: 0; background: var(--fill); color: var(--ink); font: inherit; font-size: 14px; }
+  .projmove .note { flex-basis: 100%; font-size: 12px; color: var(--ink-3); }
   .disks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .ondisk { display: inline-block; padding: 2px 9px; border-radius: 999px; background: var(--fill); color: var(--ink); font-size: 12px; }
   .ondisk i { font-style: normal; color: var(--ink-3); font-variant-numeric: tabular-nums; }
   .dupe .bk { font-style: normal; margin-left: 8px; color: var(--accent); font-size: 12px; }
-  .backups { padding: 16px 18px; border-radius: 20px; margin: 0 0 18px; }
-  .backups h3 { margin: 0; font-size: 15px; } .backups p { margin: 4px 0 10px; color: var(--ink-2); font-size: 13px; }
-  .backups dl { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px 14px; align-items: center; margin: 0; }
-  .backups dt { overflow-wrap: anywhere; color: var(--ink); } .backups dd { margin: 0; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .dproj { padding: 16px 18px; border-radius: 22px; margin: 0 0 14px; }
+  .dhead { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .dhead > div { flex: 1 1 260px; } .dhead h3 { margin: 0; font-size: 19px; } .dhead p { margin: 2px 0 0; color: var(--ink-2); font-size: 13px; }
+  .bkline { display: inline-flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); }
+  .dproj details { margin-top: 10px; } .dproj summary { cursor: pointer; color: var(--ink-2); font-size: 13px; padding: 4px 0; }
+  .dproj details .dups { margin-top: 10px; }
   .save { text-align: right; padding-right: 8px; font-variant-numeric: tabular-nums; }
   .save strong { display: block; font: 700 22px/1 -apple-system, "SF Pro Display", sans-serif; color: var(--teal); }
   .save span { color: var(--ink-3); font-size: 12px; }
@@ -265,6 +272,10 @@
   .tdest em { margin-left: 8px; font-size: 13px; }
   .tcount { color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
   .tkind { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--glass-line); color: var(--ink-2); }
+  .twarnbox h4 { color: var(--amber); } .twarnbox p { margin: 4px 0; font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+  .ttrees summary { cursor: pointer; } .tcols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 10px; }
+  .ttree { list-style: none; margin: 0; padding: 0; font-size: 12.5px; color: var(--ink-2); } .ttree li { padding: 1px 0; overflow-wrap: anywhere; }
+  @media (max-width: 640px) { .tcols { grid-template-columns: 1fr; } }
   .twhy, .twarn { grid-column: 2 / -1; font-size: 13px; color: var(--ink-3); }
   .twarn { color: var(--amber); }
   .trows { padding: 4px 16px 10px 52px; }
@@ -679,8 +690,34 @@ function section(proj, idx) {
     <span><h2>${esc(proj)}</h2><p>${t('sec.time', { time: human(secsOf(idx)), clips: clips(idx.length) })}${projDisks(proj)}</p></span></button>`;
   if (!open) return `<section class="section closed" data-proj="${esc(proj)}"><header>${head}
       <div class="covers" data-toggle="${esc(proj)}">${coversOf(idx, 6)}</div></header></section>`;
-  return `<section class="section" data-proj="${esc(proj)}"><header>${head}</header>${folders(proj, idx)}</section>`;
+  return `<section class="section" data-proj="${esc(proj)}"><header>${head}</header>${projMove(proj)}${projCons(proj)}${folders(proj, idx)}</section>`;
 }
+// A project's name, to change it or to join it to another project: what it says goes for each of its drives' top
+// folders, for the whole team (a decision, like a vote).
+const projMove = proj => !searching() && OV?.projects?.some(p => p.project === proj && p.roots?.length) ? `<form class="projmove" data-projmove="${esc(proj)}">
+  <label><span>${t('proj.name')}</span><input name="to" list="projlist" value="${esc(proj)}" maxlength="120" required></label>
+  <button class="pillbtn">${t('proj.save')}</button><span class="note">${t('proj.hint')}</span>
+  <datalist id="projlist">${OV.projects.filter(p => p.project && p.project !== proj).map(p => `<option value="${esc(p.project)}">`).join('')}</datalist></form>` : '';
+// A project on more than one drive: the drive that lacks least of it, and whether the rest fits there (free space as
+// at its last reading). Only the proposal: copying is not done here.
+function projCons(proj) {
+  const p = OV?.projects?.find(x => x.project === proj), m = p?.missing; if (!m || searching()) return '';
+  const [drive, need] = Object.entries(m).sort((a, b) => a[1] - b[1] || num(p.disks[b[0]]) - num(p.disks[a[0]]))[0];
+  const free = num(OV.devices.find(d => d.name === drive)?.free);
+  return `<p class="cons">${!need ? t('cons.all', { drive: esc(drive) })
+    : t('cons.need', { drive: esc(drive), need: bytes(need), free: bytes(free) }) + ' ' + (free >= need ? t('cons.fits') : t('cons.short', { short: bytes(need - free) }))}</p>`;
+}
+$('#view').addEventListener('submit', async e => {
+  const f = e.target.closest('[data-projmove]'); if (!f) return; e.preventDefault();
+  const from = f.dataset.projmove, to = f.to.value.trim(), roots = OV.projects.find(p => p.project === from)?.roots || [];
+  if (!to || to === from) return;
+  f.querySelector('button').disabled = true;
+  try { for (const r of roots) await post('/api/decide', { content: 'folder:' + r, kind: 'project', value: to }); }
+  catch (err) { toast(err.message); f.querySelector('button').disabled = false; return; }
+  OPEN.delete(from); OPEN.add(to); saveOpen();
+  toast(OV.projects.some(p => p.project === to) ? t('proj.joined', { from, to }) : t('proj.renamed', { to })); // toast: plain text
+  await loadOV(); show('archive');
+});
 // Inside an open project: its subfolders first, as in the Finder, then the files directly in it.
 function folders(proj, idx) {
   const by = new Map();
@@ -1030,15 +1067,17 @@ function backupOf(x) {
   const l = x.locations.find(l => l.device !== dev); return l ? locKey(l) : '';
 }
 const freed = x => num(x.bytes_extra) - (backupOf(x) ? num(x.size) : 0);
-// Projects whose duplicates sit on more than one drive: for each, the switch that keeps a backup there.
-function backupsCard(g) {
-  const p = {};
-  for (const x of g) { if (x.conflict) continue; const k = keepOf(x);
-    if (x.locations.some(l => l.device !== k.device)) p[k.project] = (p[k.project] || 0) + num(x.size); }
-  const ps = Object.entries(p).sort((a, b) => b[1] - a[1]);
-  if (!ps.length) return '';
-  return `<div class="backups glass"><h3>${t('bk.title')}</h3><p>${t('bk.sub')}</p><dl>${ps.map(([n, b]) =>
-    `<dt>${esc(n)}</dt><dd>${bytes(b)}</dd><dd><button class="switch" role="switch" aria-checked="${!!BACKUPS[n]}" aria-label="${t('bk.title')}: ${esc(n)}" data-backup="${esc(n)}"></button></dd>`).join('')}</dl></div>`;
+// Duplicates by project (of the copy kept): what each frees, its backup switch when its copies sit on more than one
+// drive, one button for its suggestions; the copies themselves stay folded, opened only to check or change one.
+const DOPEN = new Set();
+function dupProject(p, idx) {
+  const xs = idx.map(i => DUPS[i]), ver = xs.filter(x => x.verified), todo = ver.filter(x => !x.copy && x.vote !== 'discard');
+  const cross = !ME.site && xs.some(x => !x.conflict && x.locations.some(l => l.device !== keepOf(x).device));
+  return `<section class="dproj glass" data-dp="${esc(p)}"><div class="dhead"><div><h3>${esc(p || t('dups.noProject'))}</h3>
+      <p>${t('dups.projSub', { n: xs.length, size: bytes(ver.reduce((a, x) => a + freed(x), 0)) })}</p></div>
+    ${cross ? `<span class="bkline"><button class="switch" role="switch" aria-checked="${!!BACKUPS[p]}" aria-label="${t('bk.title')}: ${esc(p)}" data-backup="${esc(p)}"></button>${t('bk.title')}</span>` : ''}
+    ${todo.length ? `<button class="pillbtn" data-confirm-proj="${esc(p)}">${t('dups.confirmAll', { n: todo.length })}</button>` : ''}</div>
+    <details${DOPEN.has(p) ? ' open' : ''}><summary>${t('dups.show', { n: xs.length })}</summary><div class="dups">${idx.map(i => dupRow(DUPS[i], i)).join('')}</div></details></section>`;
 }
 async function renderDups() {
   const v = $('#view'); v.innerHTML = '';
@@ -1046,15 +1085,15 @@ async function renderDups() {
   const g = DUPS;
   if (!g.length) { v.innerHTML = `<div class="empty"><h2>${t('dups.none')}</h2><p>${t('dups.noneSub')}</p></div>`; return; }
   const ver = g.filter(x => x.verified), extra = ver.reduce((a, x) => a + freed(x), 0), unver = g.filter(x => !x.verified && !x.conflict);
-  const todo = ver.filter(x => !x.copy && x.vote !== 'discard'), canCheck = unver.filter(x => x.locations.every(l => l.online)); // checkable now
+  const canCheck = unver.filter(x => x.locations.every(l => l.online)), by = new Map(); // checkable now
+  g.forEach((x, i) => { const p = keepOf(x).project || ''; if (!by.has(p)) by.set(p, []); by.get(p).push(i); });
   $('#stat').textContent = t('dups.stat', { n: g.length });
   if (g[0]) ambient(g[0].thumb);
   v.innerHTML = `<h2 class="lead">${t('dups.lead', { size: bytes(extra) })}</h2>
     <p class="lead-sub">${t('dups.sub')}${unver.length ? t('dups.unverified', { n: unver.length, size: bytes(unver.reduce((a, x) => a + num(x.bytes_extra), 0)) }) : ''}</p>
-    ${ME.site ? '' : backupsCard(g)}
-    <div class="toolbar">${todo.length ? `<button class="pillbtn" data-confirm-all>${t('dups.confirmAll', { n: todo.length })}</button>` : ''}${
-      canCheck.length ? `<button class="pillbtn" data-verify-dups>${t('dups.verify', { n: canCheck.length })}</button>` : ''}<button class="pillbtn" data-plan>${t('dups.review')}</button></div>
-    <div class="dups">${g.map((x, i) => dupRow(x, i)).join('')}</div>`;
+    ${ME.site ? '' : `<p class="lead-sub">${t('bk.sub')}</p>`}
+    <div class="toolbar">${canCheck.length ? `<button class="pillbtn" data-verify-dups>${t('dups.verify', { n: canCheck.length })}</button>` : ''}<button class="pillbtn" data-plan>${t('dups.review')}</button></div>
+    ${[...by].sort((a, b) => b[1].reduce((s, i) => s + freed(DUPS[i]), 0) - a[1].reduce((s, i) => s + freed(DUPS[i]), 0)).map(([p, idx]) => dupProject(p, idx)).join('')}`;
 }
 function dupRow(x, i) {
   const keep = x.copy || locKey(x.locations[0]), bk = backupOf(x);
@@ -1068,6 +1107,7 @@ function dupRow(x, i) {
       <span class="state">${state}</span></div>
     <div class="save">${x.conflict ? '' : `<strong>${bytes(freed(x))}</strong><span>${x.verified ? t('dup.toFree') : t('dup.toVerify')}</span>`}</div></div>`;
 }
+$('#view').addEventListener('toggle', e => { const d = e.target.closest?.('[data-dp]'); if (d && e.target.tagName === 'DETAILS') e.target.open ? DOPEN.add(d.dataset.dp) : DOPEN.delete(d.dataset.dp); }, true);
 $('#view').addEventListener('click', async e => {
   const p = e.target.closest('[data-pick]');
   if (p) { const row = p.closest('[data-d]'), x = DUPS[+row.dataset.d];
@@ -1080,8 +1120,8 @@ $('#view').addEventListener('click', async e => {
     const contents = DUPS.filter(x => !x.verified && !x.conflict && x.locations.every(l => l.online)).map(x => x.content);
     return post('/api/verify', { contents }).then(() => { toast(t('toast.verify')); poll(); }, err => toast(err.message));
   }
-  const all = e.target.closest('[data-confirm-all]');
-  if (all) { all.disabled = true; const todo = DUPS.filter(x => x.verified && !x.copy && x.vote !== 'discard');
+  const all = e.target.closest('[data-confirm-proj]');
+  if (all) { all.disabled = true; const todo = DUPS.filter(x => x.verified && !x.copy && x.vote !== 'discard' && (keepOf(x).project || '') === all.dataset.confirmProj);
     for (const x of todo) await post('/api/decide', { content: x.content, kind: 'copy', value: locKey(x.locations[0]) }).catch(() => {});
     toast(t('dups.confirmed', { n: todo.length })); renderDups(); refreshTray(); }
 });
@@ -1196,12 +1236,12 @@ async function tidyStart(b) {
     }
     const ask = consent => post('/api/tidy/propose', { uuid: d.uuid, consent, via: TIDY.site ? 'site' : TIDY.to, lang: document.documentElement.lang });
     try {
-      const ms = await ask(false).catch(e => {
+      const r = await ask(false).catch(e => {
         if (e.message !== 'consent needed') throw e;
         const via = TIDY.site ? t('tidy.viaSiteKey', { site: TIDY.site }) : TIDY.ai?.key ? t('tidy.viaOwnKey') : t('tidy.viaComputer');
         return confirm(t('tidy.consent', { name: d.name, to: TIDY.to, via })) ? ask(true) : null;
       });
-      if (ms) TPLAN[d.uuid] = { name: d.name, moves: ms };
+      if (r) TPLAN[d.uuid] = { name: d.name, moves: r.moves, gaps: r.gaps || [], tree: r.tree || {} };
     } catch (e) { toast(`${d.name}: ${e.message}`); }
   }
   b.disabled = false; b.textContent = label;
@@ -1242,6 +1282,7 @@ function tidySheet() {
   sheet.innerHTML = `<div class="plan" style="position:relative">${X_BUTTON}
     <h3>${ok.length ? t('tidy.proposedOn', { n: ok.length, drives }) : t('tidy.nothingOn', { drives })}</h3>
     <p class="sub">${TIDY.to ? t('tidy.sheetSubTo', { to: esc(TIDY.to) }) : t('tidy.sheetSub')}</p>
+    ${Object.values(TPLAN).map(tidyCheck).join('')}
     ${ok.length ? `<div class="tbulk"><span>${t('tidy.approve')}</span>${kinds.map(k => `<button class="chip" data-tkind="${k}" aria-pressed="false">${KIND_NAME[k]} <span class="n">${ok.filter(m => m.kind === k).length}</span></button>`).join('')}
       <button class="chip sep" data-tsel="1">${t('tidy.selAll')}</button><button class="chip" data-tsel="0">${t('tidy.selNone')}</button></div>` : ''}
     ${order.map(group).join('')}
@@ -1250,6 +1291,15 @@ function tidySheet() {
   </div>`;
   tidySync();
   $('#veil').classList.add('open'); $('#veil').setAttribute('aria-hidden', 'false');
+}
+// What rushbin checked on the drive: things left behind while their like moves (the AI was asked once to complete
+// its plan), and each project the plan touches, before and after.
+function tidyCheck(p) {
+  const tree = ds => `<ul class="ttree">${ds.map(d => `<li style="padding-left:${(d.split('/').length - 1) * 14}px">${esc(baseOf(d))}</li>`).join('')}</ul>`;
+  return (p.gaps.length ? `<div class="card twarnbox"><h4>${t('tidy.gapsTitle', { n: p.gaps.length, drive: esc(p.name) })}</h4>${p.gaps.map(g =>
+      `<p>${t('tidy.gap', { path: esc(g.path), like: esc(baseOf(g.like)), to: esc(g.to) })}</p>`).join('')}</div>` : '')
+    + Object.entries(p.tree).sort().map(([proj, [b, a]]) => `<details class="card ttrees"><summary>${t('tidy.tree', { project: esc(proj), drive: esc(p.name) })}</summary>
+      <div class="tcols"><div><h4>${t('tidy.before')}</h4>${tree(b)}</div><div><h4>${t('tidy.after')}</h4>${tree(a)}</div></div></details>`).join('');
 }
 // tidySync: each group's box and each kind's chip follow the moves ticked, and the button counts them.
 function tidySync() {

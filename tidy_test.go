@@ -173,10 +173,11 @@ func TestTidyFlow(t *testing.T) {
 	if sent != "" {
 		t.Fatal("something was sent before consent")
 	}
-	var ms []TidyMove
-	if code := post("/api/tidy/propose", `{"uuid":"D","consent":true,"via":"Anthropic (Claude)"}`, &ms); code != 200 {
+	var plan struct{ Moves []TidyMove }
+	if code := post("/api/tidy/propose", `{"uuid":"D","consent":true,"via":"Anthropic (Claude)"}`, &plan); code != 200 {
 		t.Fatalf("propose: %d", code)
 	}
+	ms := plan.Moves
 	if len(ms) != 2 || !ms[0].OK || ms[1].OK || ms[0].Reason != "camera card folder" {
 		t.Fatalf("plan = %+v", ms)
 	}
@@ -185,7 +186,7 @@ func TestTidyFlow(t *testing.T) {
 		t.Fatalf("request body: %s", sent)
 	}
 	sent = ""
-	if code := post("/api/tidy/propose", `{"uuid":"D","via":"Anthropic (Claude)"}`, &ms); code != 200 || sent == "" {
+	if code := post("/api/tidy/propose", `{"uuid":"D","via":"Anthropic (Claude)"}`, &plan); code != 200 || sent == "" {
 		t.Fatalf("asking again for a consented drive: %d", code)
 	}
 	// another provider: the Anthropic key stays behind, and consent is asked again for the new receiver
@@ -201,7 +202,7 @@ func TestTidyFlow(t *testing.T) {
 	if code := post("/api/tidy/ai", `{"provider":"anthropic","url":"`+fake.URL+`","key":"`+key+`"}`, nil); code != 200 {
 		t.Fatalf("back to Anthropic: %d", code)
 	}
-	if code := post("/api/tidy/propose", `{"uuid":"D","via":"Anthropic (Claude)"}`, &ms); code != 200 {
+	if code := post("/api/tidy/propose", `{"uuid":"D","via":"Anthropic (Claude)"}`, &plan); code != 200 {
 		t.Fatalf("propose again: %d", code)
 	}
 	var res struct{ Moved, Skipped int }

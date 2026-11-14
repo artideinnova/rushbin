@@ -344,6 +344,10 @@ func serveClip(w http.ResponseWriter, r *http.Request, c *Catalog) {
 // shared: the decision is about what the team site has, a clip on a drive sent to the team (and, for the copy
 // to keep, that copy), so it may go there. A drive kept on this computer (Local) sends nothing, not even its paths.
 func (c *Catalog) shared(l DecisionLine) bool {
+	if l.Kind == "project" {
+		dev, _, _ := strings.Cut(strings.TrimPrefix(l.Content, "folder:"), "|")
+		return !on(c.device(dev).Local)
+	}
 	if l.Kind == "copy" {
 		cl := c.byKey[l.Value]
 		return cl != nil && !on(c.device(cl.Device).Local)
@@ -362,6 +366,8 @@ func (c *Catalog) valid(l DecisionLine) bool {
 		return slices.ContainsFunc(cs, func(cl *Clip) bool { return cl.Device+"|"+cl.ID == l.Value })
 	case "check":
 		return len(cs) > 0 && c.speechOf(cs[0].Thumb) != nil && (l.Value == "" || l.Value == "yes")
+	case "project": // a top folder of a drive in the catalog, and a name
+		return projectName(l.Value) && slices.ContainsFunc(c.list, func(cl *Clip) bool { return l.Content == folderKey(cl.Device, part(cl.ID, 0)) })
 	case "hide": // each start is a line of the transcript
 		h, ok := starts(l.Value)
 		if !ok || len(cs) == 0 || c.speechOf(cs[0].Thumb) == nil {
@@ -418,6 +424,9 @@ func (a *App) record(l DecisionLine) error {
 	if err == nil {
 		a.catalog().decide(l)
 		a.lastID = max(a.lastID, l.ID)
+		if l.Kind == "project" { // the projects are worked out when the catalog is built
+			a.reload()
+		}
 	}
 	return err
 }

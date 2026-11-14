@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -708,6 +709,109 @@ func validTidy(mount string, skip []string, ms []TidyMove) []TidyMove {
 	return out
 }
 
+// tidyGaps finds where a plan would leave a drive half tidied: something moves, and things of the same kind next to
+// it stay behind (DAY 1 into Footage, DAY 4 left at the project's root). The AI gets them back once to complete its
+// plan; what is still left shows with the plan. Side by side at the drive's root are projects: no gap there.
+type TidyGap struct {
+	Path string `json:"path"` // stays where it is
+	Like string `json:"like"` // something of the same kind next to it that moves
+	To   string `json:"to"`   // where that one goes
+	Kind string `json:"kind"`
+}
+
+func (g TidyGap) String() string {
+	return fmt.Sprintf("%s stays in %s, while %s (also %s) moves to %s", g.Path, path.Dir(g.Path), g.Like, g.Kind, g.To)
+}
+
+func tidyGaps(c *Catalog, mount string, skip []string, ms []TidyMove) []TidyGap {
+	within := func(p, dir string) bool {
+		p, dir = strings.ToLower(p), strings.ToLower(dir)
+		return p == dir || strings.HasPrefix(p, dir+"/")
+	}
+	moved := map[string]bool{}
+	for _, m := range ms {
+		if m.OK {
+			moved[strings.ToLower(m.From)] = true
+		}
+	}
+	seen := map[string]bool{}
+	var gaps []TidyGap
+	for _, m := range ms {
+		src, dst := path.Dir(m.From), path.Dir(m.To)
+		if !m.OK || m.Kind == "" || m.Kind == "other" || src == "." {
+			continue
+		}
+		es, _ := os.ReadDir(filepath.Join(mount, filepath.FromSlash(src)))
+		for _, e := range es {
+			p := src + "/" + e.Name()
+			if strings.HasPrefix(e.Name(), ".") || e.Name() == trash || slices.Contains(skip, e.Name()) || moved[strings.ToLower(p)] ||
+				seen[p] || within(dst, p) || tidyKind(c, mount, p) != m.Kind {
+				continue
+			}
+			seen[p] = true
+			gaps = append(gaps, TidyGap{p, m.From, dst, m.Kind})
+		}
+	}
+	return gaps
+}
+
+// tidyTree: the folders of the projects a plan touches, before and after it, four levels deep and without what is
+// inside camera cards (.RDC, BPAV, CLIP …): what the person approves, project by project.
+func tidyTree(c *Catalog, mount string, ms []TidyMove) map[string][2][]string {
+	card := regexp.MustCompile(`(?i)\.(rdc|rdm)$|^(bpav|clip|private|dcim|xdroot|sub|thmbnl|general)$`)
+	tops := map[string]bool{}
+	for _, m := range ms {
+		if m.OK {
+			tops[strings.SplitN(m.From, "/", 2)[0]], tops[strings.SplitN(m.To, "/", 2)[0]] = true, true
+		}
+	}
+	dirs := func(files []string) []string {
+		set := map[string]bool{}
+		for _, f := range files {
+			parts := strings.Split(path.Dir(f), "/")
+			for i := range min(len(parts), 4) {
+				if card.MatchString(parts[i]) || parts[i] == "." {
+					break
+				}
+				set[strings.Join(parts[:i+1], "/")] = true
+			}
+		}
+		return slices.Sorted(maps.Keys(set))
+	}
+	var before []string
+	for p := range c.files {
+		if rel, err := filepath.Rel(mount, p); err == nil && !strings.HasPrefix(rel, "..") && tops[strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]] {
+			before = append(before, filepath.ToSlash(rel))
+		}
+	}
+	after := make([]string, len(before))
+	for i, f := range before {
+		after[i] = f
+		for _, m := range ms {
+			if rest, ok := strings.CutPrefix(f, m.From); ok && m.OK && (rest == "" || strings.HasPrefix(rest, "/")) {
+				after[i] = m.To + rest
+				break
+			}
+		}
+	}
+	out := map[string][2][]string{}
+	for top := range tops {
+		var b, a []string
+		for _, d := range dirs(before) {
+			if strings.SplitN(d, "/", 2)[0] == top {
+				b = append(b, d)
+			}
+		}
+		for _, d := range dirs(after) {
+			if strings.SplitN(d, "/", 2)[0] == top {
+				a = append(a, d)
+			}
+		}
+		out[top] = [2][]string{b, a}
+	}
+	return out
+}
+
 func cond(old, s string) string {
 	if old != "" {
 		return old
@@ -971,21 +1075,49 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 			return
 		}
 		desc += "\nWrite every reason in " + cmp.Or(languageNames[b.Lang], "English") + ", the language of the person reading them."
-		var ms []TidyMove
-		if site != nil {
-			ts := *site
-			ts.wait = 10 * time.Minute // the AI may take minutes, as with the user's own
-			err = ts.call("POST", "/api/sync/tidy", map[string]string{"desc": desc}, &ms)
-		} else {
-			ms, err = propose(r.Context(), ai, desc)
+		ask := func(desc string) (ms []TidyMove, err error) {
+			if site != nil {
+				ts := *site
+				ts.wait = 10 * time.Minute // the AI may take minutes, as with the user's own
+				err = ts.call("POST", "/api/sync/tidy", map[string]string{"desc": desc}, &ms)
+			} else {
+				ms, err = propose(r.Context(), ai, desc)
+			}
+			return ms, err
 		}
+		c, skip := a.catalog(), a.catalog().device(b.UUID).Excluded
+		check := func(ms []TidyMove) ([]TidyMove, []TidyGap) {
+			ms = validTidy(mount, skip, ms)
+			for i := range ms {
+				ms[i].Kind = tidyKind(c, mount, ms[i].From)
+			}
+			return ms, tidyGaps(c, mount, skip, ms)
+		}
+		ms, err := ask(desc)
 		if err != nil {
 			http.Error(w, err.Error(), 502)
 			return
 		}
-		ms = validTidy(mount, a.catalog().device(b.UUID).Excluded, ms)
-		for i := range ms {
-			ms[i].Kind = tidyKind(a.catalog(), mount, ms[i].From)
+		ms, gaps := check(ms)
+		if len(gaps) > 0 { // once more, with what rushbin found: the AI completes its own plan
+			var prev []map[string]string
+			for _, m := range ms {
+				if m.OK {
+					prev = append(prev, map[string]string{"from": m.From, "to": m.To})
+				}
+			}
+			j, _ := json.Marshal(prev)
+			if again, err := ask(desc + "\n\nYour plan was:\n" + string(j) + "\nrushbin checked it on the drive: it leaves the drive half tidied.\n- " +
+				strings.Join(func() (l []string) {
+					for _, g := range gaps {
+						l = append(l, g.String())
+					}
+					return
+				}(), "\n- ") + "\nAnswer with the whole plan again, complete: the same treatment for everything of the same kind."); err == nil {
+				if ms2, gaps2 := check(again); len(gaps2) <= len(gaps) {
+					ms, gaps = ms2, gaps2
+				}
+			}
 		}
 		a.smu.Lock()
 		if a.tidy == nil {
@@ -993,7 +1125,7 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 		}
 		a.tidy[b.UUID] = ms
 		a.smu.Unlock()
-		send(w, ms)
+		send(w, map[string]any{"moves": ms, "gaps": gaps, "tree": tidyTree(c, mount, ms)})
 	})
 	// apply takes indexes into the plan this engine holds: no path comes from the page. Checked again now.
 	m.HandleFunc("POST /api/tidy/apply", func(w http.ResponseWriter, r *http.Request) {

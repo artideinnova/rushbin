@@ -204,8 +204,9 @@ func TestServer(t *testing.T) {
 		t.Fatalf("consent to the personal key's way: %d, asked %d, want 409 and nothing sent", code, asked)
 	}
 	code, plan := inApp("POST", "/api/tidy/propose", `{"uuid":"A","consent":true,"via":"site"}`)
-	var moves []TidyMove
-	jsonOf(plan, &moves)
+	var got struct{ Moves []TidyMove }
+	jsonOf(plan, &got)
+	moves := got.Moves
 	if code != 200 || asked != 1 || len(moves) != 2 || !moves[0].OK || moves[1].OK || strings.Contains(plan, siteKey) {
 		t.Fatalf("propose through the site: %d %s, asked %d", code, plan, asked)
 	}

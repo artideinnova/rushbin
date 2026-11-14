@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -21,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Catalog is everything the app shows, rebuilt in memory from the per-drive files after every scan.
@@ -94,7 +97,11 @@ type Decision struct {
 	Checked   bool      `json:"checked,omitempty"`
 	CheckedBy string    `json:"checked_by,omitempty"`
 	CheckedAt string    `json:"checked_at,omitempty"`
+	Project   string    `json:"project,omitempty"` // for a top folder ("folder:<device>|<name>"): the project it belongs to
 }
+
+// folderKey is the content of a decision about a drive's top folder: which project it belongs to.
+func folderKey(device, top string) string { return "folder:" + device + "|" + top }
 
 // DecisionLine is one line of decisions.jsonl, and one decision of a team (ID set by the site).
 type DecisionLine struct {
@@ -129,7 +136,16 @@ func (l DecisionLine) apply(m map[string]*Decision) {
 		if l.Value == "" || l.Value == "yes" {
 			d.Checked, d.CheckedBy, d.CheckedAt = l.Value == "yes", l.By, l.T
 		}
+	case "project":
+		if projectName(l.Value) {
+			d.Project = l.Value
+		}
 	}
+}
+
+// projectName: a project's name as a person writes it, or "" for back to what rushbin finds.
+func projectName(v string) bool {
+	return len(v) <= 120 && utf8.ValidString(v) && !strings.ContainsFunc(v, unicode.IsControl) && !strings.Contains(v, "/")
 }
 
 // starts reads the value of a hide decision: the start of each hidden line, in seconds.
@@ -409,6 +425,11 @@ func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, 
 		return a.Name < b.Name
 	})
 	c.sameProject()
+	for _, cl := range c.list { // a project chosen for a top folder wins over what rushbin finds
+		if d := dec[folderKey(cl.Device, part(cl.ID, 0))]; d != nil && d.Project != "" {
+			cl.Project = d.Project
+		}
+	}
 	for _, cs := range c.byCont {
 		only := cs[0].Device
 		for _, cl := range cs[1:] {
@@ -869,6 +890,11 @@ type Stat struct {
 	Bytes   int64   `json:"bytes,omitempty"`
 	// Disks: for a project, the bytes it takes on each drive, by the drive's name
 	Disks map[string]int64 `json:"disks,omitempty"`
+	// Roots: for a project, the drives' top folders it is made of, as device|name
+	Roots []string `json:"roots,omitempty"`
+	// Missing: for a project on more than one drive, what each drive lacks of it (each content once): what it takes
+	// to have the whole project there
+	Missing map[string]int64 `json:"missing,omitempty"`
 }
 
 func (c *Catalog) Overview() Overview {
@@ -890,12 +916,25 @@ func (c *Catalog) Overview() Overview {
 		st.Seconds += cl.Dur
 		st.Bytes += cl.Size
 	}
+	sizes, on := map[string]map[string]int64{}, map[string]map[string]bool{} // project → content → size; project+drive → content
 	for _, cl := range c.list {
+		if sizes[cl.Project] == nil {
+			sizes[cl.Project] = map[string]int64{}
+		}
+		sizes[cl.Project][cl.Content] = cl.Size
+		k := cl.Project + "\x00" + c.device(cl.Device).Name
+		if on[k] == nil {
+			on[k] = map[string]bool{}
+		}
+		on[k][cl.Content] = true
 		add(proj, cl.Project, Stat{Project: cl.Project}, cl)
 		if st := proj[cl.Project]; st.Disks == nil {
 			st.Disks = map[string]int64{}
 		}
 		proj[cl.Project].Disks[c.device(cl.Device).Name] += cl.Size
+		if r := cl.Device + "|" + part(cl.ID, 0); !slices.Contains(proj[cl.Project].Roots, r) {
+			proj[cl.Project].Roots = append(proj[cl.Project].Roots, r)
+		}
 		add(cam, cl.Codec, Stat{Label: cl.Codec}, cl)
 		if f := folder(cl.ID); f != "" {
 			add(fold, cl.Project+"/"+f, Stat{Project: cl.Project, Folder: f}, cl)
@@ -913,6 +952,46 @@ func (c *Catalog) Overview() Overview {
 		}
 		sort.Slice(s, func(i, j int) bool { return less(s[i], s[j]) })
 		return s
+	}
+	// The project's other files (sound, edit projects, sidecars, stills) count too: without a hash, the same name
+	// and size on two drives is taken as the same file.
+	roots := map[string]string{} // device|top folder → its project
+	for _, cl := range c.list {
+		roots[cl.Device+"|"+part(cl.ID, 0)] = cl.Project
+	}
+	for _, d := range c.Devices {
+		if d.Mount == "" || d.Retired != "" {
+			continue
+		}
+		for fp, r := range c.files {
+			rel, err := filepath.Rel(d.Mount, fp)
+			if err != nil || strings.HasPrefix(rel, "..") || videoExt[r.Ext] { // clips are counted above, RED's parts in their span
+				continue
+			}
+			rel = filepath.ToSlash(rel)
+			p, ok := roots[d.UUID+"|"+part(rel, 0)]
+			if !ok || !strings.Contains(rel, "/") {
+				continue
+			}
+			content := "n:" + path.Base(rel) + "|" + strconv.FormatInt(r.Size, 10)
+			sizes[p][content] = r.Size
+			k := p + "\x00" + d.Name
+			on[k][content] = true
+			proj[p].Disks[d.Name] += r.Size
+		}
+	}
+	for p, st := range proj {
+		if len(st.Disks) < 2 {
+			continue
+		}
+		st.Missing = map[string]int64{}
+		for d := range st.Disks {
+			for content, size := range sizes[p] {
+				if !on[p+"\x00"+d][content] {
+					st.Missing[d] += size
+				}
+			}
+		}
 	}
 	o.Projects = list(proj, func(a, b Stat) bool { return a.Seconds > b.Seconds || a.Seconds == b.Seconds && a.Project < b.Project })
 	o.Cameras = list(cam, func(a, b Stat) bool { return a.N > b.N || a.N == b.N && a.Label < b.Label })

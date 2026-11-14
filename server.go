@@ -1583,7 +1583,11 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, u *User) {
 	}
 	l.T, l.By = t.UTC().Format(time.RFC3339Nano), u.Name
 	c.decide(l)
-	s.bump(u.Team)
+	if l.Kind == "project" { // the projects are worked out when the catalog is built
+		s.changed(u.Team)
+	} else {
+		s.bump(u.Team)
+	}
 	send(w, l)
 }
 

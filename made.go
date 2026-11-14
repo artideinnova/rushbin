@@ -13,7 +13,8 @@ import (
 // name or place, not read: rushbin says so wherever it shows it. Empty: the file says nothing.
 
 // probeVersion: records probed before it have no provenance, so they are probed once more.
-const probeVersion = 2
+// 3: the day of the shoot from RED's metadata and from MXF headers.
+const probeVersion = 3
 
 // editors are the apps whose name in a file's encoder tag makes it an export.
 var editors = []struct{ match, name string }{

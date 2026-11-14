@@ -157,6 +157,37 @@ func TestApp(t *testing.T) {
 		t.Fatalf("with a backup of C: %+v", plan)
 	}
 	post("/api/backups", `{"project":"C","on":false}`, true)
+	// A top folder put in a project by hand: the name wins over what rushbin finds, "" gives it back.
+	for body, code := range map[string]int{`{"content":"folder:A|P","kind":"project","value":"a/b"}`: 400,
+		`{"content":"folder:A|nowhere","kind":"project","value":"Show"}`: 400, `{"content":"folder:A|P","kind":"project","value":"Show"}`: 200} {
+		if got := post("/api/decide", body, true); got != code {
+			t.Fatalf("decide %s: %d, want %d", body, got, code)
+		}
+	}
+	projects := func() (ps []string) {
+		var o Overview
+		get("/api/overview", &o)
+		for _, s := range o.Projects {
+			ps = append(ps, s.Project+" "+strings.Join(s.Roots, ","))
+		}
+		slices.Sort(ps)
+		return
+	}
+	if ps := projects(); !slices.Equal(ps, []string{"C B|C", "Show A|P"}) {
+		t.Fatalf("projects after naming P: %q", ps)
+	}
+	// Joined to C, on B: the project is on two drives; A has all of it, B lacks other.mp4 (the clip once, not twice).
+	post("/api/decide", `{"content":"folder:A|P","kind":"project","value":"C"}`, true)
+	var jo Overview
+	get("/api/overview", &jo)
+	if c := jo.Projects[slices.IndexFunc(jo.Projects, func(s Stat) bool { return s.Project == "C" })]; len(jo.Projects) != 1 ||
+		c.Missing["A"] != 0 || c.Missing["B"] != other.Size || len(c.Roots) != 2 {
+		t.Fatalf("C on two drives: %+v", jo.Projects)
+	}
+	post("/api/decide", `{"content":"folder:A|P","kind":"project","value":""}`, true)
+	if ps := projects(); !slices.Equal(ps, []string{"C B|C", "P A|P"}) {
+		t.Fatalf("projects back: %q", ps)
+	}
 	var po Overview
 	if get("/api/overview", &po); po.Projects[slices.IndexFunc(po.Projects, func(s Stat) bool { return s.Project == "P" })].Disks["A"] == 0 {
 		t.Fatalf("project P without its drive: %+v", po.Projects)

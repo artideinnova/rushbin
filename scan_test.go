@@ -201,7 +201,7 @@ func TestProbeRED(t *testing.T) {
 	}
 	bin, dir := t.TempDir(), t.TempDir()
 	must(t, os.WriteFile(filepath.Join(bin, "rushbin-red"), []byte("#!/bin/sh\n"+
-		`echo '{"frames":881,"fps":25.0,"width":6144,"height":3240,"timecode":"12:56:37:06"}'`+"\n"), 0o755))
+		`echo '{"frames":881,"fps":25.0,"width":6144,"height":3240,"timecode":"12:56:37:06","date":"20260224","time":"125637"}'`+"\n"), 0o755))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	for name, size := range map[string]int{"A004_C001_0224UB_001.R3D": 100, "A004_C001_0224UB_002.R3D": 50, "A004_C001_0224UB.RMD": 7,
 		"A004_C002_022494_001.R3D": 1000, "A004_C001_0224UB_002.R3D.bak": 9} {
@@ -209,7 +209,8 @@ func TestProbeRED(t *testing.T) {
 	}
 	r := Rec{Path: filepath.Join(dir, "A004_C001_0224UB_001.R3D"), Ext: ".r3d"}
 	probeRED(&r)
-	if r.Dur != 35.24 || r.W != 6144 || r.H != 3240 || r.FPS != "25000/1000" || r.Codec != "r3d" || r.Span != 150 {
+	if r.Dur != 35.24 || r.W != 6144 || r.H != 3240 || r.FPS != "25000/1000" || r.Codec != "r3d" || r.Span != 150 ||
+		r.Creation != "2026-02-24T12:56:37Z" { // the day of the shoot, from RED's metadata
 		t.Fatalf("RED clip = %+v", r)
 	}
 	// Nikon: one file per clip, also when numbered files sit next to it.

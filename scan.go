@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/binary"
@@ -388,6 +389,7 @@ func probeRED(r *Rec) {
 		Frames        int
 		FPS           float64
 		Width, Height int
+		Date, Time    string // local_date 20260227, local_time 165955: the camera's clock, with no time zone
 	}
 	if json.Unmarshal(out, &c) != nil || c.FPS <= 0 || c.Frames <= 0 {
 		return
@@ -395,6 +397,10 @@ func probeRED(r *Rec) {
 	r.Dur, r.W, r.H, r.Codec = float64(c.Frames)/c.FPS, c.Width, c.Height, map[string]string{".r3d": "r3d", ".nev": "n-raw"}[r.Ext]
 	r.FPS = fmt.Sprintf("%d/1000", int(math.Round(c.FPS*1000)))
 	r.Span = redSpan(r.Path)
+	// The camera's clock has no zone: kept as UTC, so the day of the shoot stays the one the camera showed.
+	if t, err := time.Parse("20060102150405", c.Date+c.Time); err == nil {
+		r.Creation = t.Format(time.RFC3339)
+	}
 	switch {
 	case r.Ext == ".nev":
 		r.Made = "camera:Nikon" // N-RAW is Nikon's own format
@@ -465,7 +471,7 @@ func probe(r *Rec) {
 			}
 		}
 	}
-	r.Creation = tags["creation_time"]
+	r.Creation = cmp.Or(tags["creation_time"], tags["modification_date"]) // MXF: when the camera wrote it (Sony, as its M01.XML)
 	r.Made = made(r.Path, tags)
 	for _, s := range p.Streams {
 		if s.CodecType == "video" {
