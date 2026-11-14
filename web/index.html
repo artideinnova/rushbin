@@ -1570,6 +1570,7 @@ async function startWizard(btn) {
     const w = WIZ[p.uuid]; if (!w) continue;
     const body = w.catalog ? { uuid: p.uuid, action: 'catalog', name: w.name, content: w.content, local: !!ME.team && !w.team, copies: !!ME.team && w.team && w.copies } : { uuid: p.uuid, action: 'ignore' };
     if (w.catalog && w.excluded) body.excluded = w.excluded;
+    if (ME.team) markAsked(p.uuid); // the setup asked about light copies
     try { await post('/api/drives', body); started += w.catalog; } catch (e) { toast(e.message); btn.disabled = false; return; }
   }
   closeClip(); toast(started ? t('wiz.started') : t('wiz.ignored')); poll();
@@ -1591,6 +1592,7 @@ async function poll() {
   const b = $('#banner'), wait = PENDING.length && !$('#veil').classList.contains('open');
   if (wait) b.innerHTML = `<span>${PENDING.length === 1 ? t('banner.one', { name: esc(PENDING[0].name) }) : t('wiz.title', { n: PENDING.length })}</span><button class="act primary" data-wopen>${t('banner.setup')}</button>`;
   b.classList.toggle('show', !!wait);
+  if (!PENDING.length) askCopies();
   const pct = st.total ? Math.min(100, Math.floor(num(st.done) / num(st.total) * 100)) : null;
   const cannot = (st.unreadable || []).map(d => t(ME.windows ? 'unreadable.fromMac' : 'unreadable.fromPC', { name: d.name, pc: PC(), fs: d.fs || '' }));
   const m = st.models || {}, dl = !num(m.need) || !OV?.devices.some(d => d.content === true) ? ''
@@ -1744,6 +1746,24 @@ function askUpdates() {
   document.body.insertAdjacentHTML('beforeend', `<div class="demo-note glass" role="note" data-ask-updates><span>${ME.windows ? t('updates.askWin') : t('updates.askMac')} ${UPDATES_TEXT()}</span>
     <button class="act primary" data-ask="1">${t('yes')}</button><button class="act" data-ask="">${t('no')}</button></div>`);
   $('[data-ask-updates]').addEventListener('click', e => { const b = e.target.closest('[data-ask]'); if (b) setUpdates(!!b.dataset.ask).then(() => $('[data-ask-updates]')?.remove()); });
+}
+// A team drive connected whose videos the team cannot watch (light copies off, the default): asked once on this
+// computer when it is connected; Drives changes it later. A drive set up in the setup sheet counts as asked there.
+const ASKED_COPIES = 'rushbin.askedCopies';
+const askedCopies = () => { try { return JSON.parse(localStorage.getItem(ASKED_COPIES)) || []; } catch { return []; } };
+const markAsked = uuid => { try { localStorage.setItem(ASKED_COPIES, JSON.stringify([...askedCopies(), uuid])); } catch {} };
+function askCopies() {
+  if (ME.site || !ME.team || $('[data-ask-copies]')) return;
+  const asked = askedCopies(), d = OV?.devices.find(d => d.online && !d.retired && d.local !== true && d.copies !== true && !asked.includes(d.uuid));
+  if (!d) return;
+  document.body.insertAdjacentHTML('beforeend', `<div class="demo-note glass" role="note" data-ask-copies><span>${t('copies.ask', {
+    name: esc(d.name), team: esc(ME.team.team), size: bytes(num(d.seconds) / 3600 * COPY_PER_HOUR) })}</span>
+    <button class="act primary" data-copies="1">${t('copies.share')}</button><button class="act" data-copies="">${t('copies.later')}</button></div>`);
+  $('[data-ask-copies]').addEventListener('click', async e => {
+    const b = e.target.closest('[data-copies]'); if (!b) return;
+    if (b.dataset.copies) { try { await post('/api/drives', { uuid: d.uuid, action: 'options', copies: true }); } catch (err) { toast(err.message); return; } toast(t('copies.started')); }
+    markAsked(d.uuid); $('[data-ask-copies]').remove(); await loadOV(); askCopies();
+  });
 }
 async function setUpdates(ask) {
   try { await post('/api/updates', { ask }); ME.updates = ask; } catch (e) { toast(e.message); }
