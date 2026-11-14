@@ -90,8 +90,51 @@ func (a *App) loadTeam() {
 	var t Team
 	if b, err := os.ReadFile(filepath.Join(a.dir, "team.json")); err == nil && json.Unmarshal(b, &t) == nil && t.Token != "" {
 		a.team = &t
+		go a.follow(&t)
 	}
 	a.lastID = lastDecisionID(filepath.Join(a.dir, "decisions.jsonl"))
+}
+
+// saveTeam writes team.json and makes t the team of this app.
+func (a *App) saveTeam(t *Team) error {
+	j, _ := json.Marshal(t)
+	if err := os.WriteFile(filepath.Join(a.dir, "team.json"), j, 0o600); err != nil {
+		return err
+	}
+	a.smu.Lock()
+	a.team = t
+	a.smu.Unlock()
+	return nil
+}
+
+// follow keeps the team's address when the site has moved to another name: its home page then answers with a
+// permanent redirect to the new name (RUSHBIN_ALIASES), while the apps' paths still work at the old one.
+func (a *App) follow(t *Team) {
+	if to := moved(t.URL); to != "" {
+		n := *t
+		n.URL = to
+		a.saveTeam(&n)
+	}
+}
+
+// moved is the address the site at site moved to, from a permanent redirect of its home page to another
+// host; "" when it has not moved or cannot be reached.
+func moved(site string) string {
+	c := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := c.Get(site + "/")
+	if err != nil {
+		return ""
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusMovedPermanently && res.StatusCode != http.StatusPermanentRedirect {
+		return ""
+	}
+	to, err := res.Location()
+	from, _ := url.Parse(site)
+	if err != nil || from == nil || to.Host == "" || to.Host == from.Host || (to.Scheme != "https" && !isLocal(to.Hostname())) {
+		return ""
+	}
+	return to.Scheme + "://" + to.Host
 }
 
 func lastDecisionID(file string) int64 {
@@ -155,13 +198,12 @@ func (a *App) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.Token, t.Name, t.Email, t.Team = res.Token, res.Name, res.Email, res.Team
-	j, _ := json.Marshal(t)
-	if err := os.WriteFile(filepath.Join(a.dir, "team.json"), j, 0o600); err != nil {
+	if err := a.saveTeam(t); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	a.smu.Lock()
-	a.team, a.signedOut = t, false
+	a.signedOut = false
 	a.smu.Unlock()
 	go a.share()
 	send(w, map[string]bool{"ok": true})

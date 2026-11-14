@@ -214,6 +214,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         completionHandler(a.runModal() == .alertFirstButtonReturn ? field.stringValue : nil)
     }
 
+    // The page asks to confirm with confirm(). Without this, WebKit answers Cancel by itself.
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        let a = NSAlert()
+        a.messageText = message
+        a.addButton(withTitle: NSLocalizedString("OK", comment: ""))
+        a.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
+        completionHandler(a.runModal() == .alertFirstButtonReturn)
+    }
+
     // Only the engine's own pages open inside the window.
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if let u = action.request.url, u.host == url?.host, u.port == url?.port { return decisionHandler(.allow) }
