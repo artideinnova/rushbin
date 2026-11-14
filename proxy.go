@@ -45,6 +45,7 @@ func (a *App) proxyNext() bool {
 	sort.Slice(todo, func(i, j int) bool { return todo[i].Project+todo[i].ID < todo[j].Project+todo[j].ID })
 	cl := todo[0]
 	a.setBackground(fmt.Sprintf("Videos for the team: %d to go", len(todo)))
+	defer a.reading(cl.Path)()
 	if err := a.makeProxy(t, cl); err != nil {
 		log.Printf("proxy %s: %v", cl.Path, err)
 		a.setBackground(fmt.Sprintf("Videos for the team: could not make %s", cl.Name))

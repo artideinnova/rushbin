@@ -143,7 +143,7 @@ func scan(catalog, vol, id, name string, excluded []string) (string, error) {
 	d.Content, d.Copies, d.Local, d.Location = prev.Content, prev.Copies, prev.Local, prev.Location // Retired is not kept: the drive is here
 	d.Scanned = time.Now().UTC().Format("2006-01-02T15:04:05Z")
 	b, _ := json.MarshalIndent(d, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, "device.json"), append(b, '\n'), 0o644); err != nil {
+	if err := writeFile(filepath.Join(dir, "device.json"), append(b, '\n')); err != nil {
 		return "", err
 	}
 	say("Reading %s", d.Name)
@@ -167,6 +167,27 @@ func checkDuplicates(catalog, id, name string) error {
 	}
 	say("%s: checking %d possible duplicates byte for byte", name, len(todo))
 	return fullHash(todo, filepath.Join(catalog, "disks", id, "fullhash.tsv"))
+}
+
+// writeFile replaces path with data whole, through a file renamed over it: a reader at the same moment (the app
+// reloads the catalog while a scan starts) sees the old file or the new one, never an empty one.
+func writeFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(0o644) // CreateTemp makes it 0600
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // identify reads the volume identity: diskutil on macOS, the volume serial number on Windows.

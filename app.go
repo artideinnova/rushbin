@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -56,6 +57,7 @@ type App struct {
 	total      int64           // 0 when not known in advance
 	queue      chan string
 	verifyNow  chan struct{}   // the page asked to check the copies the trash waits for (App.verify)
+	busy       map[string]int  // mount path → reads of that drive going on now (App.reading)
 	queued     map[string]bool // mount path → a scan of it waits in queue
 
 	wmu    sync.Mutex // serializes decision writes and trash moves
@@ -461,9 +463,11 @@ func (a *App) verify() {
 	}
 	for id, paths := range byDrive {
 		say("%s: checking %d possible duplicates byte for byte", c.device(id).Name, len(paths))
+		done := a.reading(paths[0])
 		if err := fullHash(paths, filepath.Join(a.dir, "disks", id, "fullhash.tsv")); err != nil {
 			log.Printf("verify %s: %v", id, err)
 		}
+		done()
 	}
 	a.reload()
 	a.setStatus("")
@@ -560,6 +564,7 @@ func (a *App) play(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if direct(cl) {
+		defer a.reading(cl.Path)()
 		f, err := os.Open(cl.Path)
 		if err != nil {
 			http.Error(w, "drive not connected", 404)
@@ -583,7 +588,7 @@ func (a *App) statusHandler(w http.ResponseWriter, r *http.Request) {
 	paused, need, content := a.pause(false), a.modelsNeeded(), a.catalog().contentDone(filepath.Join(a.dir, "thumbs"))
 	a.smu.Lock()
 	defer a.smu.Unlock()
-	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev,
+	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev, "busy": slices.Collect(maps.Keys(a.busy)),
 		"background": a.background, "unreadable": append([]Pending{}, a.unreadable...), "paused": paused, "content": content,
 		"models": map[string]any{"need": need, "done": a.dlDone, "error": a.dlErr}})
 }
@@ -703,7 +708,7 @@ func (a *App) editDevice(id, mount string, fn func(*Device)) error {
 	}
 	fn(&d)
 	j, _ := json.MarshalIndent(d, "", "  ")
-	return os.WriteFile(filepath.Join(dir, "device.json"), append(j, '\n'), 0o644)
+	return writeFile(filepath.Join(dir, "device.json"), append(j, '\n'))
 }
 
 // folders lists the top folders of a connected drive and whether each one is skipped.
@@ -845,6 +850,33 @@ func (a *App) changed(path string) {
 	}
 }
 
+// reading marks the drive holding path as being read by rushbin until the returned function is called: the menu
+// bar item then does not offer to eject it.
+func (a *App) reading(path string) (done func()) {
+	a.smu.Lock()
+	defer a.smu.Unlock()
+	mount := ""
+	for _, m := range a.mounted {
+		if rel, err := filepath.Rel(m, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			mount = m
+		}
+	}
+	if mount == "" {
+		return func() {}
+	}
+	if a.busy == nil {
+		a.busy = map[string]int{}
+	}
+	a.busy[mount]++
+	return func() {
+		a.smu.Lock()
+		if a.busy[mount]--; a.busy[mount] <= 0 {
+			delete(a.busy, mount)
+		}
+		a.smu.Unlock()
+	}
+}
+
 func (a *App) setStatus(format string, v ...any) {
 	a.smu.Lock()
 	a.status = fmt.Sprintf(format, v...)
@@ -931,6 +963,7 @@ func (a *App) scanner() {
 
 // catalog1 scans one drive, makes its previews and has them analyzed.
 func (a *App) catalog1(mount string) {
+	defer a.reading(mount)()
 	a.smu.Lock()
 	delete(a.queued, mount) // a change from now on queues another scan
 	a.smu.Unlock()

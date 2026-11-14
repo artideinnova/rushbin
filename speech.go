@@ -262,7 +262,9 @@ func (a *App) speechNext() bool {
 	sort.Slice(todo, func(i, j int) bool { return todo[i].Project+todo[i].ID < todo[j].Project+todo[j].ID })
 	cl := todo[0]
 	a.setBackground(fmt.Sprintf("Listening to the clips: %d to go", len(todo)))
+	done := a.reading(cl.Path)
 	segs, err := transcribe(whisper, models, cl)
+	done()
 	if err != nil {
 		log.Printf("speech %s: %v", cl.Path, err)
 		segs = []Segment{} // recorded as silent, so it is not tried again on every round

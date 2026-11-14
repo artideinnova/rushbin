@@ -695,6 +695,7 @@ async function openClip(i) {
   try { c = await api(`/api/clip?device=${encodeURIComponent(r.device)}&id=${encodeURIComponent(r.id)}`); }
   catch (e) { $('.info', sheet).innerHTML = `<h3>${esc(r.name)}</h3><p class="sub">${esc(e.message)}</p>`; return; }
   cur = { r, c, at: r.said ? num(r.said.s) : 0 };
+  tellApp();
   const row = (k, v) => v || v === 0 ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : '';
   const fps = c.fps ? `${n(c.fps)} fps` : '';
   const facts = [
@@ -838,7 +839,7 @@ function seek(x) {
 }
 // Removing the source closes the stream: the engine stops the conversion
 function stopPlay() { if (!P) return; const v = P.v; P = null; v.pause(); v.removeAttribute('src'); v.load(); }
-function closeClip() { stopPlay(); $('#veil').classList.remove('open'); $('#veil').setAttribute('aria-hidden', 'true'); cur = null; $(`.tile[data-i="${sel}"]`)?.focus(); refreshTray(); }
+function closeClip() { stopPlay(); $('#veil').classList.remove('open'); $('#veil').setAttribute('aria-hidden', 'true'); cur = null; $(`.tile[data-i="${sel}"]`)?.focus(); refreshTray(); tellApp(); }
 
 /* ---------- Decisions ---------- */
 // Pressing the same decision again clears it. Returns true when a new decision was saved.
@@ -939,6 +940,7 @@ function select(i) {
   $$('.tile.sel').forEach(x => x.classList.remove('sel'));
   sel = i; const el = $(`.tile[data-i="${i}"]`);
   if (el) { el.classList.add('sel'); el.focus({ preventScroll: true }); el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+  tellApp();
 }
 function moveSel(dx, dy) {
   const tiles = $$('.tile'); if (!tiles.length) return;
@@ -1293,7 +1295,7 @@ const errorBox = m => `<div class="empty"><h2>${t('err.catalog')}</h2><p>${esc(m
 
 /* ---------- Navigation ---------- */
 function show(view) {
-  S.view = view;
+  S.view = view; tellApp();
   $$('.seg button').forEach(b => b.setAttribute('aria-selected', b.dataset.view === view));
   $('#searchbar').hidden = view !== 'archive';
   $('.section header') && $$('.section header').forEach(h => h.style.top = '');
@@ -1530,6 +1532,36 @@ async function saveFolders(btn) {
   closeClip(); toast(t('folders.saved')); poll();
 }
 setInterval(poll, 2000);
+
+// The Mac app around this page (macos/main.swift): its menu sends commands here, it hears whether a clip is
+// selected (its Clip menu works only then), and its menu bar item asks what rushbin is doing.
+// While typing (the search field), or on a button other than a clip (Return presses it), or with a sheet open
+// over the archive, its Clip menu is off, so the keys reach the page as before.
+function tellApp() {
+  const el = document.activeElement, open = $('#veil').classList.contains('open');
+  const busy = ['INPUT', 'TEXTAREA', 'SELECT'].includes(el?.tagName) || el?.tagName === 'BUTTON' && !el.classList.contains('tile');
+  window.webkit?.messageHandlers?.rushbin?.postMessage({ clip: !busy && (!!cur || !open && S.view === 'archive' && sel >= 0) });
+}
+document.addEventListener('focusin', tellApp);
+new MutationObserver(tellApp).observe($('#veil'), { attributes: true }); // a sheet opened or closed
+document.addEventListener('focusout', () => setTimeout(tellApp));
+const MENU_KEYS = { prev: 'ArrowLeft', next: 'ArrowRight', keep: 'k', showreel: 's', discard: 'x', close: 'Escape' };
+window.rushbinMenu = cmd => {
+  const [kind, arg] = cmd.split(':');
+  if (kind === 'go') return $(`.seg [data-view="${arg}"]`)?.click();
+  if (kind === 'search') { if (S.view !== 'archive') show('archive'); return $('#q').focus(); }
+  const key = arg === 'play' ? (P ? ' ' : 'Enter') : MENU_KEYS[arg]; // the clip keys, as if pressed
+  if (kind === 'clip' && key) document.dispatchEvent(new KeyboardEvent('keydown', { key }));
+};
+// rushbinWork: what rushbin is doing (the text and percent shown at the top of this page) and the connected drives,
+// each with whether rushbin is reading it now, so the menu bar item offers to eject only the others.
+window.rushbinWork = async () => {
+  const st = await api('/api/status');
+  if (st.version !== VERSION) await loadOV();
+  const pct = st.total ? Math.min(100, Math.floor(num(st.done) / num(st.total) * 100)) : null;
+  return { text: st.status ? I18N.from(st.status) : '', pct, drives: (OV?.devices || []).filter(d => d.online && d.mount)
+    .map(d => ({ name: d.name, mount: d.mount, busy: (st.busy || []).includes(d.mount) })) };
+};
 
 // For owners: the database copies failed, are old or did not restore (deploy/backup.sh, deploy/restore-test.sh).
 function backupNote(text) {

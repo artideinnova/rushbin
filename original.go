@@ -416,6 +416,7 @@ func (a *App) upload(q Request, up Upload) (string, []string, error) {
 	if cl == nil {
 		return "", nil, fmt.Errorf("not in this Mac's catalog")
 	}
+	defer a.reading(cl.Path)()
 	f, err := os.Open(cl.Path)
 	if err != nil {
 		return "", nil, fmt.Errorf("the drive is not connected any more")

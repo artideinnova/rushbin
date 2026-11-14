@@ -212,7 +212,8 @@ func TestMacStrings(t *testing.T) {
 		t.Fatal(err)
 	}
 	plist, _ := os.ReadFile("macos/Info.plist")
-	keys := captures(regexp.MustCompile(`NSLocalizedString\("([^"]+)"`), string(swift))
+	keys := captures(regexp.MustCompile(`(?:NSLocalizedString|item|command)\("([^"]+)"`), string(swift)) // item and command: the menu's (buildMenu)
+	slices.Sort(keys)
 	keys = slices.Compact(keys)
 	prompts := captures(regexp.MustCompile(`<key>(NS\w+UsageDescription)</key>`), string(plist))
 	for _, lang := range languages(t) {

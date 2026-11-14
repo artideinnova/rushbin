@@ -6,6 +6,7 @@
 # Without them the app uses the ones on the PATH (development only), and has no search by content.
 # RED_DIR holds rushbin-red and RED's REDR3D.dylib and REDMetal.dylib (R3D decoded on the GPU) (from the private rushbin-red repository: RED's SDK license
 # keeps it out of this one); without it R3D files are cataloged as plain files.
+# dmgbuild (MIT, macos/dmg/requirements.txt) is installed once into OUT_DIR/dmgbuild, checked the same way.
 # Sparkle (the updater, MIT) is fetched once into OUT_DIR/sparkle, from its release checked against its SHA-256;
 # Publishing the dmg signs it for Sparkle with sign_update, from the Sparkle folder of OUT.
 # SIGN_ID=<Developer ID hash> signs with the hardened runtime; NOTARY_PROFILE=<notarytool profile> also
@@ -81,7 +82,10 @@ rm -rf $FINAL && mv $APP $FINAL && rmdir $OUT/new && APP=$FINAL
 if [[ -n ${NOTARY_PROFILE:-} ]]; then
   DMG=$OUT/rushbin-$VERSION.dmg
   rm -f $DMG
-  hdiutil create -quiet -volname rushbin -srcfolder $APP -ov -format UDZO $DMG
+  # The dmg's window: the app, a link to Applications and the background (macos/dmg), laid out by dmgbuild.
+  DB=$OUT/dmgbuild
+  [[ -x $DB/bin/dmgbuild ]] || { rm -rf $DB && python3 -m venv $DB && $DB/bin/pip install -q --only-binary :all: --require-hashes -r macos/dmg/requirements.txt }
+  $DB/bin/dmgbuild -s macos/dmg/settings.py -D app=$APP -D background=$ROOT/macos/dmg/background.png rushbin $DMG
   codesign --force --timestamp -s $SIGN_ID $DMG
   xcrun notarytool submit $DMG --keychain-profile $NOTARY_PROFILE --wait
   xcrun stapler staple $DMG

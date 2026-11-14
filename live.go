@@ -85,6 +85,7 @@ func (a *App) startLive(w http.ResponseWriter, r *http.Request, cl *Clip, t floa
 		filepath.Join(dir, "index.m3u8"))...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
+	stop := a.reading(cl.Path)
 	done, err := feed(cmd)
 	if err == nil {
 		if err = cmd.Start(); err != nil {
@@ -92,6 +93,7 @@ func (a *App) startLive(w http.ResponseWriter, r *http.Request, cl *Clip, t floa
 		}
 	}
 	if err != nil {
+		stop()
 		os.RemoveAll(dir)
 		http.Error(w, "ffmpeg did not start", 500)
 		return
@@ -99,6 +101,7 @@ func (a *App) startLive(w http.ResponseWriter, r *http.Request, cl *Clip, t floa
 	go func() {
 		err := cmd.Wait()
 		done()
+		stop()
 		if err != nil && !strings.Contains(err.Error(), "killed") {
 			log.Printf("live %s: %v %s", cl.Path, err, stderr.String())
 		}
