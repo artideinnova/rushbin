@@ -112,3 +112,15 @@ func TestPollRetry(t *testing.T) {
 		t.Fatal("the drive was not asked again")
 	}
 }
+
+// TestOverviewAt: on the team site, each drive says which Mac it is connected to now, from what the Macs report,
+// without changing the catalog it is read from.
+func TestOverviewAt(t *testing.T) {
+	c, err := buildCatalog([]drive{{Device: Device{UUID: "A", Name: "LaCie"}}, {Device: Device{UUID: "B", Name: "T9"}}}, nil, nil, nil)
+	must(t, err)
+	c.setOnlineAt(map[string]string{"A": "Mac di Dana"})
+	ds := c.Overview().Devices
+	if ds[0].At != "Mac di Dana" || ds[1].At != "" || c.Devices[0].At != "" {
+		t.Fatalf("at: %q, %q; catalog %q", ds[0].At, ds[1].At, c.Devices[0].At)
+	}
+}

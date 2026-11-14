@@ -225,6 +225,7 @@ I18N.words({
 "drive.removeTeam": "チームから削除",
 "drive.goneSince": "{date}から使用不可",
 "drive.connectedCap": "接続中",
+"drive.connectedAt": "{mac}に接続中",
 "drive.notConnected": "未接続",
 "drive.cataloged": "{state}。{date}にカタログ作成",
 "legend.video": "ビデオ {size}",

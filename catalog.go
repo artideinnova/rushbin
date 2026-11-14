@@ -54,6 +54,7 @@ type DeviceInfo struct {
 	UniqueB    int64          `json:"unique_bytes"` // and their size: what would be lost with this drive
 	Online     bool           `json:"online"`
 	Made       map[string]int `json:"made,omitempty"` // its clips by what made them, "kind:maker" (made.go)
+	At         string         `json:"at,omitempty"`   // on the team site: the Mac it is connected to now
 }
 
 // Clip is one video file. Copies of the same content share Content (sampled hash).
@@ -797,9 +798,11 @@ type Stat struct {
 }
 
 func (c *Catalog) Overview() Overview {
-	o := Overview{Devices: c.Devices}
-	if o.Devices == nil {
-		o.Devices = []*DeviceInfo{}
+	o := Overview{Devices: make([]*DeviceInfo, len(c.Devices))}
+	for i, d := range c.Devices { // copies: where each drive is connected changes from one answer to the next
+		x := *d
+		x.At = c.macOf(d.UUID)
+		o.Devices[i] = &x
 	}
 	proj, cam, fold, lab := map[string]*Stat{}, map[string]*Stat{}, map[string]*Stat{}, map[string]*Stat{}
 	add := func(m map[string]*Stat, k string, s Stat, cl *Clip) {

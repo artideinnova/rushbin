@@ -561,7 +561,7 @@ function suggestions(q) {
   const lb = (OV.labels || []).filter(x => hit(pretty(x.label))).slice(0, 6)
     .map(x => ({ type: 'label', value: x.label, text: pretty(x.label), label: t('label.seen'), ico: '◇', html: hl(pretty(x.label)), meta: clips(x.n) }));
   const dv = OV.devices.filter(x => !x.retired && hit(x.name)).slice(0, 5)
-    .map(x => ({ type: 'device', value: x.uuid, text: x.name, label: t('label.drive'), ico: '▭', html: hl(x.name), meta: x.online ? t('drive.connected') : x.location || clips(x.clips) }));
+    .map(x => ({ type: 'device', value: x.uuid, text: x.name, label: t('label.drive'), ico: '▭', html: hl(x.name), meta: x.online ? t('drive.connected') : x.at ? t('loc.at', { mac: x.at }) : x.location || clips(x.clips) }));
   const fl = FLAGS.filter(([v, l]) => hit(l) || hit(v)).map(([v, l]) => ({ type: 'flag', value: v, text: l, label: '', ico: '◆', html: hl(l), meta: t('suggest.filter') }));
   if (p.length) groups.push([t('group.projects'), p]);
   if (f.length) groups.push([t('group.folders'), f]);
@@ -1051,8 +1051,8 @@ function renderDisks() {
   if (!ds.length) { v.innerHTML = emptyCatalog(); return; }
   v.innerHTML = `<div class="disks">${ds.map(d => {
     const size = num(d.size) || 1, used = size - num(d.free), pv = num(d.video_bytes) / size * 100, po = Math.max(0, (used - num(d.video_bytes)) / size * 100);
-    const state = [d.retired ? t('drive.goneSince', { date: when(d.retired, { day: 'numeric', month: 'long', year: 'numeric' }) }) : d.online ? t('drive.connectedCap') : t('drive.notConnected'), esc(d.fs || ''), d.size ? bytes(d.size) : ''].filter(Boolean).join(', ');
-    return `<div class="disk-card glass${d.retired ? ' gone' : ''}"><h3><span class="dot${d.online ? ' on' : ''}"></span>${esc(d.name)}${ME.site ? (ME.role === 'owner' ? `<button class="act" style="margin-left:auto" data-dropdrive="${esc(d.uuid)}" data-name="${esc(d.name)}">${t('drive.removeTeam')}</button>` : '')
+    const state = [d.retired ? t('drive.goneSince', { date: when(d.retired, { day: 'numeric', month: 'long', year: 'numeric' }) }) : d.online ? t('drive.connectedCap') : d.at ? t('drive.connectedAt', { mac: esc(d.at) }) : t('drive.notConnected'), esc(d.fs || ''), d.size ? bytes(d.size) : ''].filter(Boolean).join(', ');
+    return `<div class="disk-card glass${d.retired ? ' gone' : ''}"><h3><span class="dot${d.online || d.at ? ' on' : ''}"></span>${esc(d.name)}${ME.site ? (ME.role === 'owner' ? `<button class="act" style="margin-left:auto" data-dropdrive="${esc(d.uuid)}" data-name="${esc(d.name)}">${t('drive.removeTeam')}</button>` : '')
       : `<button class="act" style="margin-left:auto" data-rename="${esc(d.uuid)}">${t('rename')}</button>`}</h3>
       <p class="sub">${t('drive.cataloged', { state, date: when(d.scanned, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) })}</p>
       <div class="meter"><i style="width:${pv}%;background:var(--accent)"></i><i style="width:${po}%;background:rgba(255,255,255,.28)"></i></div>
@@ -1355,7 +1355,7 @@ $('#sortbtn').addEventListener('click', () => { const m = $('#sortmenu'); m.clas
 // The drive menu: the archive of one drive, connected drives first (the order of Drives).
 $('#drivebtn').addEventListener('click', () => {
   const m = $('#drivemenu'), cur = S.tokens.find(x => x.type === 'device')?.value || '';
-  m.innerHTML = [['', t('drives.all'), true], ...OV.devices.filter(d => !d.retired).map(d => [d.uuid, d.name, d.online])]
+  m.innerHTML = [['', t('drives.all'), true], ...OV.devices.filter(d => !d.retired).map(d => [d.uuid, d.name, d.online || !!d.at])]
     .map(([v, l, on]) => `<button role="menuitemradio" aria-checked="${v === cur}" data-drive="${esc(v)}">${v ? `<i class="dot${on ? ' on' : ''}"></i>` : ''}${esc(l)}</button>`).join('');
   m.classList.toggle('open'); $('#drivebtn').setAttribute('aria-expanded', m.classList.contains('open'));
 });

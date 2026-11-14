@@ -225,6 +225,7 @@ I18N.words({
 "drive.removeTeam": "Quitar del equipo",
 "drive.goneSince": "Perdido desde el {date}",
 "drive.connectedCap": "Conectado",
+"drive.connectedAt": "Conectado a {mac}",
 "drive.notConnected": "No conectado",
 "drive.cataloged": "{state}. Catalogado el {date}",
 "legend.video": "Video {size}",
