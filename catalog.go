@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -407,6 +408,7 @@ func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, 
 		}
 		return a.Name < b.Name
 	})
+	c.sameProject()
 	for _, cs := range c.byCont {
 		only := cs[0].Device
 		for _, cl := range cs[1:] {
@@ -422,6 +424,75 @@ func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, 
 	}
 	c.suggest()
 	return c, nil
+}
+
+// sameShared: the contents two top folders must share to be one project whatever their names.
+const sameShared = 10
+
+// sameProject joins the top folders that hold one production under different names, often on different drives
+// (Sanremo2026 on one, BILLBOARD - SANREMO 2026 on another): they share at least sameShared contents, or share
+// some and one name holds the other. The project takes the name that the others hold, else the biggest folder's.
+func (c *Catalog) sameProject() {
+	type pair struct{ a, b string }
+	shared, size := map[pair]int{}, map[string]int64{}
+	for _, cl := range c.list {
+		size[cl.Project] += cl.Size
+	}
+	for _, cs := range c.byCont {
+		ps := map[string]bool{}
+		for _, cl := range cs {
+			if cl.Project != "" {
+				ps[cl.Project] = true
+			}
+		}
+		names := slices.Sorted(maps.Keys(ps))
+		for i, a := range names {
+			for _, b := range names[i+1:] {
+				shared[pair{a, b}]++
+			}
+		}
+	}
+	key := func(p string) string { return strings.ToLower(notAlnum.ReplaceAllString(p, "")) }
+	holds := func(a, b string) bool { ka, kb := key(a), key(b); return len(kb) >= 4 && strings.Contains(ka, kb) }
+	up := map[string]string{}
+	root := func(p string) string {
+		for up[p] != "" {
+			p = up[p]
+		}
+		return p
+	}
+	for pr, n := range shared {
+		if n >= sameShared || holds(pr.a, pr.b) || holds(pr.b, pr.a) {
+			if a, b := root(pr.a), root(pr.b); a != b {
+				up[b] = a
+			}
+		}
+	}
+	if len(up) == 0 {
+		return
+	}
+	groups := map[string][]string{}
+	for p := range size {
+		groups[root(p)] = append(groups[root(p)], p)
+	}
+	name := map[string]string{}
+	for _, ps := range groups {
+		slices.SortFunc(ps, func(a, b string) int { return cmp.Or(cmp.Compare(size[b], size[a]), strings.Compare(a, b)) })
+		best, held := ps[0], false // the biggest, unless a name is held by all the others: then the shortest such name
+		for _, p := range ps {
+			if !slices.ContainsFunc(ps, func(o string) bool { return o != p && !holds(o, p) }) && (!held || len(p) < len(best)) {
+				best, held = p, true
+			}
+		}
+		for _, p := range ps {
+			name[p] = best
+		}
+	}
+	for _, cl := range c.list {
+		if n := name[cl.Project]; n != "" {
+			cl.Project = n
+		}
+	}
 }
 
 // fullHashes maps "path, size, mtime" to the full hash taken at that size and time (fullhash.tsv).
@@ -527,14 +598,15 @@ type Group struct {
 }
 
 type Location struct {
-	Disk   string `json:"disk"`
-	Device string `json:"device"`
-	Mount  string `json:"mount,omitempty"`
-	ID     string `json:"id"`
-	Path   string `json:"path,omitempty"`
-	Online bool   `json:"online"`
-	At     string `json:"at,omitempty"`    // the team Mac the drive is connected to now (on the site)
-	Where  string `json:"where,omitempty"` // where the drive is kept
+	Disk    string `json:"disk"`
+	Device  string `json:"device"`
+	Mount   string `json:"mount,omitempty"`
+	ID      string `json:"id"`
+	Project string `json:"project,omitempty"` // the project it belongs to, its top folder or the one that holds the same production
+	Path    string `json:"path,omitempty"`
+	Online  bool   `json:"online"`
+	At      string `json:"at,omitempty"`    // the team Mac the drive is connected to now (on the site)
+	Where   string `json:"where,omitempty"` // where the drive is kept
 }
 
 func (c *Catalog) group(content string) Group {
@@ -563,7 +635,7 @@ func (c *Catalog) locations(content string) []Location {
 	var ls []Location
 	for _, cl := range cs {
 		d := c.device(cl.Device)
-		ls = append(ls, Location{Disk: d.Name, Device: cl.Device, Mount: d.Mount, ID: cl.ID, Path: cl.Path, Online: d.Online && fileExists(cl.Path),
+		ls = append(ls, Location{Disk: d.Name, Device: cl.Device, Mount: d.Mount, ID: cl.ID, Project: cl.Project, Path: cl.Path, Online: d.Online && fileExists(cl.Path),
 			At: c.macOf(cl.Device), Where: d.Location})
 	}
 	return ls

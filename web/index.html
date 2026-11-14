@@ -667,7 +667,10 @@ const secsOf = idx => idx.reduce((a, i) => a + num(ROWS[i].dur), 0);
 const coversOf = (idx, k) => [...idx].sort((a, b) => num(ROWS[b].dur) - num(ROWS[a].dur)).slice(0, k).map(i => `<img loading="lazy" src="${thumb(ROWS[i].thumb)}" alt="">`).join('');
 // Where a project is: each drive it is on, biggest first, with what it takes there.
 const projDisks = proj => { const d = OV?.projects?.find(p => p.project === proj)?.disks || {};
-  const e = Object.entries(d).sort((a, b) => b[1] - a[1]);
+  return diskChips(d); };
+// Inside a project: the drives a folder's clips are on (the copy shown of each).
+const rowDisks = idx => { const d = {}; for (const i of idx) d[ROWS[i].disk] = (d[ROWS[i].disk] || 0) + num(ROWS[i].size); return diskChips(d); };
+const diskChips = d => { const e = Object.entries(d).sort((a, b) => b[1] - a[1]);
   return e.length ? `<span class="disks">${e.map(([n, b]) => `<span class="ondisk">${esc(n)} <i>${bytes(b)}</i></span>`).join('')}</span>` : ''; };
 function section(proj, idx) {
   const open = !proj || !!S.q || OPEN.has(proj);
@@ -691,7 +694,7 @@ function folders(proj, idx) {
 }
 function sub(proj, f, idx) {
   const open = !!S.q || OPEN.has(proj + '/' + f), at = `data-toggle="${esc(proj)}" data-folder="${esc(f)}"`;
-  const head = `<button class="sec-head sub-head" ${at} aria-expanded="${open}">${CHEV}<span><h3>${esc(f)}</h3><p>${t('sec.time', { time: human(secsOf(idx)), clips: clips(idx.length) })}</p></span></button>`;
+  const head = `<button class="sec-head sub-head" ${at} aria-expanded="${open}">${CHEV}<span><h3>${esc(f)}</h3><p>${t('sec.time', { time: human(secsOf(idx)), clips: clips(idx.length) })}${rowDisks(idx)}</p></span></button>`;
   return `<div class="sub">${head}${open ? grid(proj, f, idx) : `<div class="covers" ${at}>${coversOf(idx, 8)}</div>`}</div>`;
 }
 const grid = (proj, f, idx) => `<div class="grid">${idx.slice(0, LIMIT).map(tile).join('')}</div>${idx.length > LIMIT
@@ -1018,19 +1021,20 @@ function moveSel(dx, dy) {
 
 /* ---------- Duplicates ---------- */
 let DUPS = [], BACKUPS = {};
-const projOf = key => key.split('|')[1]?.split('/')[0] || '';
+// The project of the copy kept: a production on several drives under several names is one project.
+const keepOf = x => x.locations.find(l => locKey(l) === x.copy) || x.locations[0];
 // The copy kept as a backup when its project asks for one: the first on another drive (backupOf in app.go).
 function backupOf(x) {
-  const keep = x.copy || locKey(x.locations[0]), dev = keep.split('|')[0];
-  if (!BACKUPS[projOf(keep)]) return '';
+  const k = keepOf(x), dev = k.device;
+  if (!BACKUPS[k.project]) return '';
   const l = x.locations.find(l => l.device !== dev); return l ? locKey(l) : '';
 }
 const freed = x => num(x.bytes_extra) - (backupOf(x) ? num(x.size) : 0);
 // Projects whose duplicates sit on more than one drive: for each, the switch that keeps a backup there.
 function backupsCard(g) {
   const p = {};
-  for (const x of g) { if (x.conflict) continue; const keep = x.copy || locKey(x.locations[0]), dev = keep.split('|')[0];
-    if (x.locations.some(l => l.device !== dev)) p[projOf(keep)] = (p[projOf(keep)] || 0) + num(x.size); }
+  for (const x of g) { if (x.conflict) continue; const k = keepOf(x);
+    if (x.locations.some(l => l.device !== k.device)) p[k.project] = (p[k.project] || 0) + num(x.size); }
   const ps = Object.entries(p).sort((a, b) => b[1] - a[1]);
   if (!ps.length) return '';
   return `<div class="backups glass"><h3>${t('bk.title')}</h3><p>${t('bk.sub')}</p><dl>${ps.map(([n, b]) =>
