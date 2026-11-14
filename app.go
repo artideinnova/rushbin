@@ -56,7 +56,8 @@ type App struct {
 	done       int64           // how far the step is: files, bytes or clips
 	total      int64           // 0 when not known in advance
 	queue      chan string
-	verifyNow  chan struct{}   // the page asked to check the copies the trash waits for (App.verify)
+	verifyNow  chan struct{}   // the page asked to check copies byte for byte (App.verify)
+	verifyFor  map[string]bool // what it asked for: contents, and "" for the copies the trash waits for
 	busy       map[string]int  // mount path → reads of that drive going on now (App.reading)
 	queued     map[string]bool // mount path → a scan of it waits in queue
 
@@ -201,7 +202,22 @@ func (a *App) routes() http.Handler {
 	m.HandleFunc("GET /live/{id}/{file}", a.serveLive)
 	m.HandleFunc("POST /api/decide", a.decide)
 	m.HandleFunc("POST /api/apply", a.apply)
+	// Check byte for byte: the copies of the contents named (from Duplicates), or none named, those the trash
+	// waits for (from Review).
 	m.HandleFunc("POST /api/verify", func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ Contents []string }
+		json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&b)
+		a.smu.Lock()
+		if a.verifyFor == nil {
+			a.verifyFor = map[string]bool{}
+		}
+		if len(b.Contents) == 0 {
+			b.Contents = []string{""}
+		}
+		for _, c := range b.Contents {
+			a.verifyFor[c] = true
+		}
+		a.smu.Unlock()
 		select {
 		case a.verifyNow <- struct{}{}:
 		default: // already asked: one check covers it
@@ -445,17 +461,25 @@ func (a *App) plan() []Move {
 // whyUnverified: a copy waits for the check byte for byte, which the page asks for (App.verify).
 const whyUnverified = "Copies not yet verified byte for byte"
 
-// verify reads byte for byte the copies the trash waits for: every copy, on a connected drive, of each content
-// the plan cannot move yet because its copies are not verified. Only when asked: reading them whole takes long.
+// verify reads byte for byte every copy, on a connected drive, of the contents the page asked for: groups from
+// Duplicates, or the ones the plan cannot move yet because their copies are not verified (Review). Only when
+// asked: reading them whole takes long.
 // The scanner runs it, so it never reads a drive at the same time as a scan.
 func (a *App) verify() {
-	c, byDrive, done := a.catalog(), map[string][]string{}, map[string]bool{}
-	for _, m := range a.plan() {
-		if m.Why != whyUnverified || done[m.Content] {
-			continue
+	a.smu.Lock()
+	want := a.verifyFor
+	a.verifyFor = nil
+	a.smu.Unlock()
+	if want[""] {
+		for _, m := range a.plan() {
+			if m.Why == whyUnverified {
+				want[m.Content] = true
+			}
 		}
-		done[m.Content] = true
-		for _, cl := range c.byCont[m.Content] {
+	}
+	c, byDrive := a.catalog(), map[string][]string{}
+	for content := range want {
+		for _, cl := range c.byCont[content] {
 			if cl.FullHash == "" && c.device(cl.Device).Online && fileExists(cl.Path) {
 				byDrive[cl.Device] = append(byDrive[cl.Device], cl.Path)
 			}

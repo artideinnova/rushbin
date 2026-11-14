@@ -966,12 +966,13 @@ async function renderDups() {
   const g = DUPS;
   if (!g.length) { v.innerHTML = `<div class="empty"><h2>${t('dups.none')}</h2><p>${t('dups.noneSub')}</p></div>`; return; }
   const ver = g.filter(x => x.verified), extra = ver.reduce((a, x) => a + num(x.bytes_extra), 0), unver = g.filter(x => !x.verified && !x.conflict);
-  const todo = ver.filter(x => !x.copy && x.vote !== 'discard');
+  const todo = ver.filter(x => !x.copy && x.vote !== 'discard'), canCheck = unver.filter(x => x.locations.every(l => l.online)); // checkable now
   $('#stat').textContent = t('dups.stat', { n: g.length });
   if (g[0]) ambient(g[0].thumb);
   v.innerHTML = `<h2 class="lead">${t('dups.lead', { size: bytes(extra) })}</h2>
-    <p class="lead-sub">${t('dups.sub')}${unver.length ? t('dups.unverified', { n: unver.length }) : ''}</p>
-    <div class="toolbar">${todo.length ? `<button class="pillbtn" data-confirm-all>${t('dups.confirmAll', { n: todo.length })}</button>` : ''}<button class="pillbtn" data-plan>${t('dups.review')}</button></div>
+    <p class="lead-sub">${t('dups.sub')}${unver.length ? t('dups.unverified', { n: unver.length, size: bytes(unver.reduce((a, x) => a + num(x.bytes_extra), 0)) }) : ''}</p>
+    <div class="toolbar">${todo.length ? `<button class="pillbtn" data-confirm-all>${t('dups.confirmAll', { n: todo.length })}</button>` : ''}${
+      canCheck.length ? `<button class="pillbtn" data-verify-dups>${t('dups.verify', { n: canCheck.length })}</button>` : ''}<button class="pillbtn" data-plan>${t('dups.review')}</button></div>
     <div class="dups">${g.map((x, i) => dupRow(x, i)).join('')}</div>`;
 }
 function dupRow(x, i) {
@@ -990,6 +991,10 @@ $('#view').addEventListener('click', async e => {
   const p = e.target.closest('[data-pick]');
   if (p) { const row = p.closest('[data-d]'), x = DUPS[+row.dataset.d];
     await keepCopy(x.content, p.dataset.pick); x.copy = p.dataset.pick; row.outerHTML = dupRow(x, +row.dataset.d); return; }
+  if (e.target.closest('[data-verify-dups]')) {
+    const contents = DUPS.filter(x => !x.verified && !x.conflict && x.locations.every(l => l.online)).map(x => x.content);
+    return post('/api/verify', { contents }).then(() => { toast(t('toast.verify')); poll(); }, err => toast(err.message));
+  }
   const all = e.target.closest('[data-confirm-all]');
   if (all) { all.disabled = true; const todo = DUPS.filter(x => x.verified && !x.copy && x.vote !== 'discard');
     for (const x of todo) await post('/api/decide', { content: x.content, kind: 'copy', value: locKey(x.locations[0]) }).catch(() => {});

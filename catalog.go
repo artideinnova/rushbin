@@ -323,6 +323,16 @@ func loadCatalog(dir string, online map[string]bool) (*Catalog, error) {
 }
 
 // buildCatalog turns the drives, the decisions and what Apple Vision saw into the catalog the pages show.
+// clipName is the name a clip shows: its file's, but a RED clip in several files is named without the _001 of its
+// first one (A004_C001_0224UB.R3D), as RED and the editing apps name it.
+func clipName(r Rec) string {
+	n := filepath.Base(r.Path)
+	if r.Span > 0 && len(n) > len("_001.r3d") {
+		return n[:len(n)-len("_001.r3d")] + n[len(n)-len(".r3d"):]
+	}
+	return n
+}
+
 func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, looks map[string]*Look) (*Catalog, error) {
 	c := &Catalog{byKey: map[string]*Clip{}, byCont: map[string][]*Clip{}, files: map[string]Rec{}, dec: dec, looks: looks, speech: map[string]*Speech{}}
 	// Retired drives last: their clips are not in the archive, only counted, and lost if no drive still here has them.
@@ -342,7 +352,7 @@ func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, 
 				if x, err := filepath.Rel(d.Mount, r.Path); err == nil {
 					rel = filepath.ToSlash(x)
 				}
-				cl := &Clip{Device: d.UUID, ID: rel, Path: r.Path, Project: part(rel, 0), Name: filepath.Base(r.Path),
+				cl := &Clip{Device: d.UUID, ID: rel, Path: r.Path, Project: part(rel, 0), Name: clipName(r),
 					Ext: r.Ext, Codec: r.Codec, W: r.W, H: r.H, FPS: fps(r.FPS), Dur: r.Dur, Size: r.Size, Content: "c:" + r.Hash,
 					Alpha: alpha(r.PixFmt)}
 				if t, err := time.Parse(time.RFC3339, r.Mtime); err == nil {
@@ -350,6 +360,9 @@ func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, 
 				}
 				if t, err := time.Parse(time.RFC3339Nano, r.Creation); err == nil {
 					cl.Created = &t
+				}
+				if r.Span > 0 { // a RED clip in several files: all of them, here and in what only this drive has
+					cl.Size = r.Span
 				}
 				d.Clips++
 				d.Seconds += cl.Dur
@@ -361,9 +374,6 @@ func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, 
 						d.LostB += cl.Size
 					}
 					return
-				}
-				if r.Span > 0 {
-					cl.Size = r.Span
 				}
 				cl.Thumb = notAlnum.ReplaceAllString(cl.Content, "_")
 				cl.Look = looks[cl.Thumb]

@@ -296,8 +296,9 @@ func inventory(root, out string, excluded []string) (int, error) {
 				e := strings.ToLower(filepath.Ext(p))
 				r := Rec{Path: p, Ext: e, Size: st.Size(), Mtime: st.ModTime().UTC().Format(time.RFC3339)}
 				red := redClip(p)
-				// A RED clip is read again every time: its record covers the _002 … files next to it too.
-				if old, ok := prev[p]; ok && old.Size == r.Size && old.Mtime == r.Mtime && !red {
+				// A RED clip's record covers the _002 … files next to it too: it is read again only when they changed
+				// (their total size) or it could not be read before.
+				if old, ok := prev[p]; ok && old.Size == r.Size && old.Mtime == r.Mtime && (!red || old.Codec != "" && old.Span == redSpan(p)) {
 					recs <- old
 					continue
 				}
@@ -389,22 +390,30 @@ func probeRED(r *Rec) {
 	}
 	r.Dur, r.W, r.H, r.Codec = float64(c.Frames)/c.FPS, c.Width, c.Height, map[string]string{".r3d": "r3d", ".nev": "n-raw"}[r.Ext]
 	r.FPS = fmt.Sprintf("%d/1000", int(math.Round(c.FPS*1000)))
-	name := filepath.Base(r.Path)
+	r.Span = redSpan(r.Path)
+}
+
+// redSpan is the size of a RED clip split in files: its _001 file and the _002, _003 … next to it; 0 for a clip in
+// one file.
+func redSpan(p string) int64 {
+	name := filepath.Base(p)
 	if !strings.HasSuffix(strings.ToLower(name), "_001.r3d") {
-		return // one file
+		return 0
 	}
 	prefix := strings.ToLower(name[:len(name)-len("001.r3d")])
-	files, _ := os.ReadDir(filepath.Dir(r.Path))
+	files, _ := os.ReadDir(filepath.Dir(p))
+	var span int64
 	for _, f := range files {
 		n := strings.ToLower(f.Name())
 		if rest, ok := strings.CutPrefix(n, prefix); ok && len(rest) == len("001.r3d") && strings.HasSuffix(rest, ".r3d") {
 			if _, err := strconv.Atoi(rest[:3]); err == nil {
 				if info, err := f.Info(); err == nil {
-					r.Span += info.Size()
+					span += info.Size()
 				}
 			}
 		}
 	}
+	return span
 }
 
 func probe(r *Rec) {

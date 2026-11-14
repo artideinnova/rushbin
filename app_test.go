@@ -68,6 +68,15 @@ func TestApp(t *testing.T) {
 	if len(dups) != 1 || dups[0].Copies != 3 || dups[0].Verified {
 		t.Fatalf("dups = %+v, want one group of 3, not verified yet", dups)
 	}
+	// Asked for other contents (from Duplicates), the check reads only those.
+	if code := post("/api/verify", `{"contents":["c:another"]}`, true); code != 200 {
+		t.Fatalf("verify other contents: %d", code)
+	}
+	<-app.verifyNow
+	app.verify()
+	if get("/api/dups", &dups); dups[0].Verified {
+		t.Fatal("a group verified without being asked for")
+	}
 	// A drive's heavy work turned off shows at once (the catalog is reloaded before the answer).
 	if code := post("/api/drives", `{"uuid":"B","action":"options","content":false}`, true); code != 200 {
 		t.Fatalf("options: %d", code)
