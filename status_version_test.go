@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -82,5 +83,32 @@ func TestDeviceRewrite(t *testing.T) {
 		if len(c.Overview().Devices) != 1 {
 			t.Fatalf("reload %d: the drive vanished", i)
 		}
+	}
+}
+
+// TestPollRetry: a drive whose identity cannot be read once (diskutil failing on a busy drive) is asked again on
+// the next round, so it does not stay "not connected".
+func TestPollRetry(t *testing.T) {
+	vols := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(vols, "T9"), 0o755))
+	app := &App{dir: t.TempDir(), volumes: vols, mounted: map[string]string{}, seen: map[string]string{}, ignored: map[string]bool{},
+		queue: make(chan string, 8)}
+	must(t, app.reload())
+	fail := true
+	identifyVolume = func(mount string) (Device, error) {
+		if fail {
+			return Device{}, errors.New("diskutil: busy")
+		}
+		return Device{UUID: "T9", Name: "T9", Mount: mount}, nil
+	}
+	defer func() { identifyVolume = identify }()
+	app.poll()
+	if len(app.mounted) != 0 {
+		t.Fatalf("mounted after a failure: %v", app.mounted)
+	}
+	fail = false
+	app.poll()
+	if app.mounted["T9"] == "" {
+		t.Fatal("the drive was not asked again")
 	}
 }

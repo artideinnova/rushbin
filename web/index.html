@@ -243,6 +243,7 @@
   .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
   /* Decisions */
   .chip.sep { margin-left: 10px; }
+  .dupe .made { display: block; font-size: 12px; color: var(--ink-3); margin-top: 2px; }
   .vote { display: flex; gap: 6px; margin-bottom: 18px; }
   .vote button { flex: 1; height: 40px; border-radius: 999px; border: 1px solid var(--glass-line); background: rgba(255,255,255,.05); cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: background .15s, color .15s; }
   .vote button:hover { background: rgba(255,255,255,.1); }
@@ -506,10 +507,26 @@ const PC = () => ME.windows ? 'PC' : 'Mac', FINDER = () => ME.windows ? t('app.e
 const S = { view: 'archive', q: '', tokens: [], sort: '' };
 const SORTS = [['', t('sort.project')], ['duration', t('sort.duration')], ['date', t('sort.date')], ['size', t('sort.size')], ['name', t('sort.name')]];
 const FLAGS = [['4k', t('flag.4k'), 'var(--ink)'], ['vertical', t('flag.vertical'), 'var(--ink)'], ['copies', t('flag.copies'), 'var(--teal)'],
+  ['original', t('flag.original'), 'var(--ink)'], ['export', t('flag.export'), 'var(--ink)'],
   ['undecided', t('flag.undecided'), 'var(--ink-3)'], ['keep', t('flag.keep'), 'var(--green)'], ['showreel', t('flag.showreel'), 'var(--amber)'], ['discard', t('flag.discard'), 'var(--red)'],
   ['suggest-discard', t('flag.suggest'), 'var(--red)']];
 const SUGGEST = { discard: t('suggest.discard') };
 const pretty = l => l.replace(/_/g, ' ');
+// What made a clip (made.go): "kind:maker", the kind ending in ? when deduced from its name and folder, not read.
+const MADE = { camera: who => t('made.camera', { who }), recorder: who => t('made.recorder', { who }), export: who => t('made.export', { who }), preview: who => t('made.preview', { who }) };
+const MADE_KIND = { camera: t('made.k.camera'), recorder: t('made.k.recorder'), export: t('made.k.export'), preview: t('made.k.preview') };
+function madeText(m) {
+  const [k, who] = (m || '').split(/:(.*)/s), kind = k.replace('?', '');
+  if (!MADE[kind]) return '';
+  return (who ? MADE[kind](who) : MADE_KIND[kind]) + (k.endsWith('?') ? t('made.guess') : '');
+}
+// A drive's clips by what made them, the most first: "Camera: Sony ILME-FX6V 381, RED 105. Exports: DaVinci Resolve 48."
+function madeSummary(m) {
+  const by = {};
+  for (const [k, n] of Object.entries(m || {})) { const [kind, who] = k.split(/:(.*)/s); (by[kind] ||= []).push([who || t('made.someApp'), n]); }
+  return ['camera', 'recorder', 'export', 'preview'].filter(k => by[k])
+    .map(k => `${MADE_KIND[k]}: ${by[k].sort((a, b) => b[1] - a[1]).map(([w, n]) => `${esc(w)} ${num(n)}`).join(', ')}`).join('. ');
+}
 const VOTES = { keep: t('vote.keep'), showreel: t('vote.showreel'), discard: t('vote.discard') }, VOTE_KEYS = { k: 'keep', s: 'showreel', x: 'discard' };
 const thumbOf = content => content.replace(/[^A-Za-z0-9]+/g, '_');
 const locKey = l => `${l.device}|${l.id}`;
@@ -742,7 +759,7 @@ async function openClip(i) {
       ${seen}${speechCard(c)}
       <div class="card"><h4>${nloc > 1 ? t('where.copies', { n: nloc }) : t('where.title')}</h4>${locNote ? `<p class="note">${locNote}</p>` : ''}${locs}</div>
       <div class="card"><h4>${t('tech.title')}</h4><dl>
-        ${row(t('tech.codec'), c.codec)}${row(t('tech.created'), c.created ? when(c.created) : '')}
+        ${row(t('made.title'), madeText(c.made))}${row(t('tech.codec'), c.codec)}${row(t('tech.created'), c.created ? when(c.created) : '')}
       </dl></div>${privacy}
     </div>`;
   $('[data-close]', sheet).focus();
@@ -982,7 +999,7 @@ function dupRow(x, i) {
     : !x.verified ? t('dup.unverified')
     : x.copy ? (x.copy_by ? t('dup.confirmedBy', { name: esc(x.copy_by) }) : t('dup.confirmed')) : t('dup.suggested');
   return `<div class="dupe glass" data-d="${i}"><img loading="lazy" src="${thumb(x.thumb)}" alt="">
-    <div><b>${esc(x.name)}</b><ul role="radiogroup" aria-label="${t('dup.pick')}">${x.locations.map(l => { const on = locKey(l) === keep;
+    <div><b>${esc(x.name)}</b>${x.made ? `<span class="made">${esc(madeText(x.made))}</span>` : ''}<ul role="radiogroup" aria-label="${t('dup.pick')}">${x.locations.map(l => { const on = locKey(l) === keep;
       return `<li><button role="radio" data-pick="${esc(locKey(l))}" aria-checked="${on && !!x.copy}"${on && !x.copy ? ' class="prop"' : ''}${x.conflict ? ' disabled' : ''}><span class="r"></span><span><strong>${esc(l.disk)}</strong> ${esc(l.id)}</span></button></li>`; }).join('')}</ul>
       <span class="state">${state}</span></div>
     <div class="save">${x.conflict ? '' : `<strong>${bytes(x.bytes_extra)}</strong><span>${x.verified ? t('dup.toFree') : t('dup.toVerify')}</span>`}</div></div>`;
@@ -1040,7 +1057,7 @@ function renderDisks() {
       <p class="sub">${t('drive.cataloged', { state, date: when(d.scanned, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) })}</p>
       <div class="meter"><i style="width:${pv}%;background:var(--accent)"></i><i style="width:${po}%;background:rgba(255,255,255,.28)"></i></div>
       <div class="legend"><span><i style="background:var(--accent)"></i>${t('legend.video', { size: bytes(d.video_bytes) })}</span><span><i style="background:rgba(255,255,255,.28)"></i>${t('legend.other')}</span><span>${t('legend.free', { size: bytes(d.free) })}</span></div>
-      <dl><dt>${t('drive.footage')}</dt><dd>${human(d.seconds)}</dd><dt>${t('drive.clips')}</dt><dd>${n(d.clips)}</dd><dt>${t('drive.kept')}</dt><dd>${esc(d.location || t('drive.notSet'))}</dd>
+      <dl><dt>${t('drive.footage')}</dt><dd>${human(d.seconds)}</dd><dt>${t('drive.clips')}</dt><dd>${n(d.clips)}</dd>${d.made ? `<dt>${t('drive.made')}</dt><dd>${madeSummary(d.made)}</dd>` : ''}<dt>${t('drive.kept')}</dt><dd>${esc(d.location || t('drive.notSet'))}</dd>
         ${d.retired ? `<dt>${t('drive.lost')}</dt><dd>${d.lost ? t('drive.lostText', { clips: clips(d.lost), size: bytes(d.lost_bytes) }) : t('drive.lostNone')}</dd>`
         : `<dt>${t('drive.only')}</dt><dd>${d.unique ? t('drive.onlyText', { clips: clips(d.unique), size: bytes(d.unique_bytes) }) : t('drive.onlyNone')}</dd>`}<dt>${t('drive.skipped')}</dt><dd>${esc((d.excluded || []).join(', ') || t('drive.noFolders'))}</dd>
         ${ME.site || d.retired ? '' : optRow(d, 'content', t('opt.content'), '', contentText(d))

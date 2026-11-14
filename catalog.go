@@ -45,14 +45,15 @@ type Catalog struct {
 
 type DeviceInfo struct {
 	Device
-	Clips      int     `json:"clips"`
-	Seconds    float64 `json:"seconds"`
-	VideoBytes int64   `json:"video_bytes"`
-	Unique     int     `json:"unique"` // clips with no copy on any other drive
-	Lost       int     `json:"lost"`   // a retired drive: its clips with no copy on the drives still here
-	LostB      int64   `json:"lost_bytes"`
-	UniqueB    int64   `json:"unique_bytes"` // and their size: what would be lost with this drive
-	Online     bool    `json:"online"`
+	Clips      int            `json:"clips"`
+	Seconds    float64        `json:"seconds"`
+	VideoBytes int64          `json:"video_bytes"`
+	Unique     int            `json:"unique"` // clips with no copy on any other drive
+	Lost       int            `json:"lost"`   // a retired drive: its clips with no copy on the drives still here
+	LostB      int64          `json:"lost_bytes"`
+	UniqueB    int64          `json:"unique_bytes"` // and their size: what would be lost with this drive
+	Online     bool           `json:"online"`
+	Made       map[string]int `json:"made,omitempty"` // its clips by what made them, "kind:maker" (made.go)
 }
 
 // Clip is one video file. Copies of the same content share Content (sampled hash).
@@ -74,6 +75,7 @@ type Clip struct {
 	Created  *time.Time `json:"created"`
 	Thumb    string     `json:"thumb"`
 	Alpha    bool       `json:"alpha,omitempty"` // has transparency: graphics, titles, mattes
+	Made     string     `json:"made,omitempty"`  // what made it: kind:maker (made.go)
 	Look     *Look      `json:"look,omitempty"`
 }
 
@@ -354,7 +356,7 @@ func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, 
 				}
 				cl := &Clip{Device: d.UUID, ID: rel, Path: r.Path, Project: part(rel, 0), Name: clipName(r),
 					Ext: r.Ext, Codec: r.Codec, W: r.W, H: r.H, FPS: fps(r.FPS), Dur: r.Dur, Size: r.Size, Content: "c:" + r.Hash,
-					Alpha: alpha(r.PixFmt)}
+					Alpha: alpha(r.PixFmt), Made: r.Made}
 				if t, err := time.Parse(time.RFC3339, r.Mtime); err == nil {
 					cl.FullHash = valid[stamp(r.Path, r.Size, t.Unix())]
 				}
@@ -365,6 +367,12 @@ func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, 
 					cl.Size = r.Span
 				}
 				d.Clips++
+				if cl.Made != "" {
+					if d.Made == nil {
+						d.Made = map[string]int{}
+					}
+					d.Made[strings.Replace(cl.Made, "?:", ":", 1)]++ // read or deduced, it counts the same here
+				}
 				d.Seconds += cl.Dur
 				d.VideoBytes += cl.Size
 				if d.Retired != "" {
@@ -508,8 +516,9 @@ type Group struct {
 	Name       string `json:"name"`
 	Size       int64  `json:"size"`
 	Copies     int    `json:"copies"`
-	Verified   bool   `json:"verified"` // every copy has the same full hash
-	Conflict   bool   `json:"conflict"` // same sample, different content: not duplicates
+	Verified   bool   `json:"verified"`       // every copy has the same full hash
+	Conflict   bool   `json:"conflict"`       // same sample, different content: not duplicates
+	Made       string `json:"made,omitempty"` // what made it: the same footage on two drives, or the same export saved twice
 	BytesExtra int64  `json:"bytes_extra"`
 	Thumb      string `json:"thumb"`
 	Decision
@@ -529,7 +538,7 @@ type Location struct {
 
 func (c *Catalog) group(content string) Group {
 	cs := c.byCont[content]
-	g := Group{Content: content, Name: cs[0].Name, Size: cs[0].Size, Copies: len(cs), Thumb: cs[0].Thumb, Decision: c.decision(content)}
+	g := Group{Content: content, Name: cs[0].Name, Size: cs[0].Size, Copies: len(cs), Thumb: cs[0].Thumb, Made: cs[0].Made, Decision: c.decision(content)}
 	g.Locations = c.locations(content)
 	hashes := map[string]bool{}
 	missing := false
@@ -749,6 +758,10 @@ func (c *Catalog) match(cl *Clip, q Query) bool {
 			ok = cl.H > cl.W
 		case "4k":
 			ok = max(cl.W, cl.H) >= 3800
+		case "original": // from a camera or a sound recorder
+			ok = madeKind(cl.Made) == "camera" || madeKind(cl.Made) == "recorder"
+		case "export": // made by an editing app, its previews too
+			ok = madeKind(cl.Made) == "export" || madeKind(cl.Made) == "preview"
 		case "undecided":
 			ok = vote == ""
 		case "keep", "discard", "showreel":

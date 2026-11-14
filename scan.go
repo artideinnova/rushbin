@@ -63,6 +63,8 @@ type Rec struct {
 	Bitrate              int64
 	PixFmt               string `json:",omitempty"`
 	Span                 int64  `json:",omitempty"` // a clip split in files (RED): the size of all of them
+	Made                 string `json:",omitempty"` // what made it (made.go)
+	P                    int    `json:",omitempty"` // the probe that read it (probeVersion)
 }
 
 var probeExt = map[string]bool{".mxf": true, ".mp4": true, ".mov": true, ".m4v": true, ".avi": true, ".mkv": true, ".mts": true, ".mpg": true, ".wav": true}
@@ -298,7 +300,8 @@ func inventory(root, out string, excluded []string) (int, error) {
 				red := redClip(p)
 				// A RED clip's record covers the _002 … files next to it too: it is read again only when they changed
 				// (their total size) or it could not be read before.
-				if old, ok := prev[p]; ok && old.Size == r.Size && old.Mtime == r.Mtime && (!red || old.Codec != "" && old.Span == redSpan(p)) {
+				if old, ok := prev[p]; ok && old.Size == r.Size && old.Mtime == r.Mtime && (!red || old.Codec != "" && old.Span == redSpan(p)) &&
+					(old.P == probeVersion || !probeExt[e] && !red) {
 					recs <- old
 					continue
 				}
@@ -311,6 +314,7 @@ func inventory(root, out string, excluded []string) (int, error) {
 				if red {
 					probeRED(&r)
 				}
+				r.P = probeVersion
 				recs <- r
 			}
 		}()
@@ -391,6 +395,14 @@ func probeRED(r *Rec) {
 	r.Dur, r.W, r.H, r.Codec = float64(c.Frames)/c.FPS, c.Width, c.Height, map[string]string{".r3d": "r3d", ".nev": "n-raw"}[r.Ext]
 	r.FPS = fmt.Sprintf("%d/1000", int(math.Round(c.FPS*1000)))
 	r.Span = redSpan(r.Path)
+	switch {
+	case r.Ext == ".nev":
+		r.Made = "camera:Nikon" // N-RAW is Nikon's own format
+	case strings.HasPrefix(strings.ToUpper(filepath.Base(r.Path)), "DSC_"):
+		r.Made = "camera?:Nikon" // R3D NE: RED's format, named the Nikon way
+	default:
+		r.Made = "camera:RED"
+	}
 }
 
 // redSpan is the size of a RED clip split in files: its _001 file and the _002, _003 … next to it; 0 for a clip in
@@ -423,19 +435,18 @@ func probe(r *Rec) {
 	}
 	var p struct {
 		Format struct {
-			Duration string `json:"duration"`
-			BitRate  string `json:"bit_rate"`
-			Tags     struct {
-				CreationTime string `json:"creation_time"`
-			} `json:"tags"`
+			Duration string            `json:"duration"`
+			BitRate  string            `json:"bit_rate"`
+			Tags     map[string]string `json:"tags"`
 		} `json:"format"`
 		Streams []struct {
-			CodecType  string `json:"codec_type"`
-			CodecName  string `json:"codec_name"`
-			RFrameRate string `json:"r_frame_rate"`
-			PixFmt     string `json:"pix_fmt"`
-			Width      int    `json:"width"`
-			Height     int    `json:"height"`
+			CodecType  string            `json:"codec_type"`
+			CodecName  string            `json:"codec_name"`
+			RFrameRate string            `json:"r_frame_rate"`
+			PixFmt     string            `json:"pix_fmt"`
+			Width      int               `json:"width"`
+			Height     int               `json:"height"`
+			Tags       map[string]string `json:"tags"`
 		} `json:"streams"`
 	}
 	if json.Unmarshal(out, &p) != nil {
@@ -443,7 +454,19 @@ func probe(r *Rec) {
 	}
 	r.Dur, _ = strconv.ParseFloat(p.Format.Duration, 64)
 	r.Bitrate, _ = strconv.ParseInt(p.Format.BitRate, 10, 64)
-	r.Creation = p.Format.Tags.CreationTime
+	tags := map[string]string{}
+	for k, v := range p.Format.Tags {
+		tags[strings.ToLower(k)] = v
+	}
+	for _, s := range p.Streams { // a stream's tags as s.<key>, the first stream that has it
+		for k, v := range s.Tags {
+			if k = "s." + strings.ToLower(k); tags[k] == "" {
+				tags[k] = v
+			}
+		}
+	}
+	r.Creation = tags["creation_time"]
+	r.Made = made(r.Path, tags)
 	for _, s := range p.Streams {
 		if s.CodecType == "video" {
 			r.Codec, r.FPS, r.W, r.H, r.PixFmt = s.CodecName, s.RFrameRate, s.Width, s.Height, s.PixFmt

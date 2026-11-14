@@ -776,6 +776,9 @@ func (a *App) watch() {
 	}
 }
 
+// identifyVolume is identify, replaced in tests.
+var identifyVolume = identify
+
 func (a *App) poll() {
 	now := map[string]bool{}
 	changed := false
@@ -787,10 +790,14 @@ func (a *App) poll() {
 		if known {
 			continue
 		}
-		d, err := identify(mount)
+		d, err := identifyVolume(mount)
+		if err != nil { // diskutil failed, as it can on a busy drive: asked again on the next round, never given up
+			log.Printf("identify %s: %v", mount, err)
+			continue
+		}
 		a.smu.Lock()
-		if err != nil || d.UUID == "" || d.Bus == "Disk Image" { // installers and other disk images
-			if err == nil && d.UUID == "" && d.Bus != "Disk Image" { // like NTFS on an MBR disk, on the Mac (scan.go identify)
+		if d.UUID == "" || d.Bus == "Disk Image" { // installers and other disk images
+			if d.UUID == "" && d.Bus != "Disk Image" { // like NTFS on an MBR disk, on the Mac (scan.go identify)
 				a.unreadable = append(a.unreadable, Pending{Name: d.Name, Mount: mount, FS: d.FS})
 			}
 			a.seen[mount] = ""

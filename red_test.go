@@ -27,7 +27,7 @@ func TestRedClip(t *testing.T) {
 	must(t, os.WriteFile(first, make([]byte, 10), 0o644))
 	must(t, os.WriteFile(filepath.Join(vol, "C001_002.R3D"), make([]byte, 20), 0o644))
 	st, _ := os.Stat(first)
-	old := Rec{Path: first, Ext: ".r3d", Hash: "h", Size: 10, Mtime: st.ModTime().UTC().Format(time.RFC3339), Dur: 5, Codec: "r3d", Span: 30}
+	old := Rec{Path: first, Ext: ".r3d", Hash: "h", Size: 10, Mtime: st.ModTime().UTC().Format(time.RFC3339), Dur: 5, Codec: "r3d", Span: 30, P: probeVersion}
 	b, _ := json.Marshal(old)
 	must(t, os.WriteFile(out, append(b, '\n'), 0o644))
 	read := func() Rec {
