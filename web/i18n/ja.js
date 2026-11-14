@@ -557,6 +557,8 @@ I18N.words({
   "Into its own folder": "自身のフォルダ内への移動",
   "No longer in that place": "その場所にはもうありません",
   "Something is already there": "すでに何かがあります",
+  "In a folder this drive's catalog skips": "このドライブのカタログが除外しているフォルダ内です",
+  "A file keeps its name": "ファイル名は変更しません",
   "Same destination as another move": "ほかの移動と移動先が同じ",
   "Overlaps another move": "ほかの移動と重なっています",
   "Into a folder that also moves": "移動するフォルダの中への移動",

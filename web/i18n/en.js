@@ -558,6 +558,8 @@ I18N.words({
   "Into its own folder": "Into its own folder",
   "No longer in that place": "No longer in that place",
   "Something is already there": "Something is already there",
+  "In a folder this drive's catalog skips": "In a folder this drive's catalog skips",
+  "A file keeps its name": "A file keeps its name",
   "Same destination as another move": "Same destination as another move",
   "Overlaps another move": "Overlaps another move",
   "Into a folder that also moves": "Into a folder that also moves",

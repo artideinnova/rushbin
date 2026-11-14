@@ -46,8 +46,8 @@ const (
 	tidyUndoFile    = "tidy_undo.json"
 	tidyMaxDesc     = 60_000 // bytes of description sent at most
 	tidyMaxFolders  = 600
-	tidyNames       = 12 // a folder with up to this many files lists their names, a bigger one their patterns
-	tidyDepth       = 4  // deeper folders are summed into their ancestor at this depth
+	tidyNames       = 200 // names listed per folder at most, a numbered camera sequence counting as one
+	tidyDepth       = 4   // deeper folders are summed into their ancestor at this depth
 )
 
 // AI is the way to a model: the provider, its model, the key (only ever in a request header to that provider) and
@@ -115,7 +115,15 @@ func siteAI() (AI, error) {
 	return ai, nil
 }
 
-const tidySystem = `You reorganize a video production drive. You get a description of its folders: per folder the files, size, types, the file names (or, in folders with many files, their patterns with digits shown as #), clip durations, codecs and dates. Propose moves of folders or files into a clearer structure, for example Project/Date/Camera, keeping what is already clear where it is. Rules: never delete anything; paths are relative to the drive root with forward slashes; every move takes an existing path listed in the description; never move into or out of _rushbin_trash; never move a folder into itself; no two moves to the same destination; do not move both a folder and something inside it. Give each move a one-line reason. Answer with only a JSON object {"moves": [{"from": "...", "to": "...", "reason": "..."}]}, with an empty list if the drive is already tidy.`
+const tidySystem = `You reorganize a video production drive the way a good assistant editor or DIT would. You get a description of its folders: per folder the files, size, types, every file name directly in it (a numbered sequence, like a camera's clips, shown as first … last with its count), what made its files when known ("made": camera and model, sound recorder, export from an editing app, preview of an editing app; a "?" means deduced from names and folders, not read from the files), clip durations, codecs and dates.
+How footage is kept in post-production, which your moves follow:
+1. A camera card or a clip is never split. A folder of camera originals moves whole, with what sits next to its clips (XML sidecars, .rtn, the .wav of a RED clip, .RDC folders, BPAV, CLIP, PRIVATE, DCIM). Never move single files out of it.
+2. Each project keeps apart its original footage (by camera or by day), its sound recordings, its editing project files (with their autosaves and render previews), and its exports (all versions of one piece together, grouped by subject when the names show one).
+3. Exports from an editing app lying loose among originals or at a project's top level belong in that project's exports folder.
+4. Editing projects (.prproj, .drp, .fcpbundle, .avb, .aep) find their media by path: moving original footage they use breaks their links. Prefer moving exports and loose files; move originals only when clearly misplaced, and then say in the reason that the editing project will need relinking.
+5. Never change a file's name, only its folder. New folders take names in the language the drive's folders already use.
+6. Keep what is already clear where it is: no move without a reason a producer would agree with.
+Rules: never delete anything; paths are relative to the drive root with forward slashes; every move takes an existing path listed in the description; never move into or out of _rushbin_trash; never move a folder into itself; no two moves to the same destination; do not move both a folder and something inside it. Give each move a one-line reason. Answer with only a JSON object {"moves": [{"from": "...", "to": "...", "reason": "..."}]}, with an empty list if the drive is already tidy.`
 
 // tidySchema is the plan's shape, enforced by the providers that take a JSON schema (OpenAI-compatible servers
 // get the prompt alone); the plan is read and checked the same way whoever answers.
@@ -304,21 +312,25 @@ func describe(c *Catalog, uuid, mount string) (string, error) {
 		files    int
 		size     int64
 		types    map[string]int
-		patterns map[string]int
-		names    []string // the first few, listed when the folder has only a few files
+		names    []string // the files directly in it
+		made     map[string]int
 		dur      float64
 		codecs   map[string]int
 		from, to time.Time
 		projects map[string]bool
 	}
 	folders := map[string]*agg{}
+	skip := map[string]bool{} // the folders the drive's catalog skips: their names never reach the AI, nothing in them moves
+	for _, x := range c.device(uuid).Excluded {
+		skip[x] = true
+	}
 	get := func(rel string) *agg {
 		if parts := strings.Split(rel, "/"); len(parts) > tidyDepth {
 			rel = strings.Join(parts[:tidyDepth], "/")
 		}
 		g := folders[rel]
 		if g == nil {
-			g = &agg{types: map[string]int{}, patterns: map[string]int{}, codecs: map[string]int{}, projects: map[string]bool{}}
+			g = &agg{types: map[string]int{}, codecs: map[string]int{}, projects: map[string]bool{}, made: map[string]int{}}
 			folders[rel] = g
 		}
 		return g
@@ -329,7 +341,7 @@ func describe(c *Catalog, uuid, mount string) (string, error) {
 		if err != nil {
 			return nil // unreadable: left out
 		}
-		if p != mount && (strings.HasPrefix(d.Name(), ".") || d.Name() == trash) {
+		if p != mount && (strings.HasPrefix(d.Name(), ".") || d.Name() == trash || d.IsDir() && skip[d.Name()]) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -349,11 +361,12 @@ func describe(c *Catalog, uuid, mount string) (string, error) {
 		g.files++
 		g.size += info.Size()
 		g.types[strings.ToLower(strings.TrimPrefix(path.Ext(rel), "."))]++
-		ext := path.Ext(d.Name())
-		if len(g.names) < tidyNames {
+		if path.Dir(rel) == folderOf(rel) { // directly in the folder listed, not summed from deeper ones
 			g.names = append(g.names, d.Name())
 		}
-		g.patterns[digits.ReplaceAllString(strings.TrimSuffix(d.Name(), ext), "#")+ext]++
+		if m := c.files[p].Made; m != "" {
+			g.made[m]++
+		}
 		total += info.Size()
 		files++
 		return nil
@@ -427,10 +440,11 @@ func describe(c *Catalog, uuid, mount string) (string, error) {
 		line := fmt.Sprintf("%s/ files %d, %s", name, g.files, mb(g.size))
 		if g.files > 0 {
 			line += "; types: " + top(g.types, 5)
-			if g.files <= tidyNames {
-				line += "; files: " + strings.Join(g.names, ", ")
-			} else {
-				line += "; name patterns: " + top(g.patterns, 4)
+			if len(g.names) > 0 {
+				line += "; files: " + listNames(g.names)
+			}
+			if len(g.made) > 0 {
+				line += "; made: " + top(g.made, 6)
 			}
 		}
 		if g.dur > 0 {
@@ -460,14 +474,53 @@ func describe(c *Catalog, uuid, mount string) (string, error) {
 	return b.String(), nil
 }
 
-var digits = regexp.MustCompile(`[0-9]`)
+var digits = regexp.MustCompile(`[0-9]+`)
+
+// folderOf is the folder a file is listed under in the description: its own, or its ancestor at tidyDepth.
+func folderOf(rel string) string {
+	dir := path.Dir(rel)
+	if parts := strings.Split(dir, "/"); len(parts) > tidyDepth {
+		return strings.Join(parts[:tidyDepth], "/")
+	}
+	return dir
+}
+
+// listNames lists file names, sorted, a numbered sequence of 4 or more (576_0017.MXF, 576_0018.MXF …) as
+// "576_0017.MXF … 576_0070.MXF (54)", at most tidyNames entries.
+func listNames(names []string) string {
+	names = slices.Clone(names)
+	slices.Sort(names)
+	groups := map[string][]string{}
+	var order []string
+	for _, n := range names {
+		k := digits.ReplaceAllString(n, "#")
+		if groups[k] == nil {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], n)
+	}
+	var out []string
+	for _, k := range order {
+		g := groups[k]
+		if len(g) >= 4 && strings.Contains(k, "#") {
+			out = append(out, fmt.Sprintf("%s … %s (%d)", g[0], g[len(g)-1], len(g)))
+		} else {
+			out = append(out, g...)
+		}
+	}
+	if len(out) > tidyNames {
+		out = append(out[:tidyNames], fmt.Sprintf("+%d more", len(out)-tidyNames))
+	}
+	return strings.Join(out, ", ")
+}
 
 func mb(n int64) string { return fmt.Sprintf("%d MB", (n+999_999)/1_000_000) }
 
 // validTidy checks every move against the drive as it is now. A move is refused when it leaves the drive,
 // touches the trash, lands on itself or inside itself, collides with a file or another move, or its source
 // is gone. Moves are renames, so they never cross volumes (a rename across volumes fails, nothing is copied).
-func validTidy(mount string, ms []TidyMove) []TidyMove {
+// skip: the folder names the drive's catalog skips (Device.Excluded): nothing in them moves.
+func validTidy(mount string, skip []string, ms []TidyMove) []TidyMove {
 	root, err := filepath.EvalSymlinks(mount)
 	if err != nil {
 		root = mount
@@ -514,10 +567,16 @@ func validTidy(mount string, ms []TidyMove) []TidyMove {
 			m.Why = "Into its own folder"
 		case !inDrive(path.Dir(from)) || !inDrive(path.Dir(to)):
 			m.Why = "Path outside the drive"
+		case slices.ContainsFunc(skip, func(x string) bool {
+			return slices.Contains(strings.Split(from, "/"), x) || slices.Contains(strings.Split(to, "/"), x)
+		}):
+			m.Why = "In a folder this drive's catalog skips"
 		}
 		if m.Why == "" {
-			if _, err := os.Lstat(filepath.Join(mount, filepath.FromSlash(from))); err != nil {
+			if st, err := os.Lstat(filepath.Join(mount, filepath.FromSlash(from))); err != nil {
 				m.Why = "No longer in that place"
+			} else if !st.IsDir() && path.Base(from) != path.Base(to) {
+				m.Why = "A file keeps its name"
 			} else if _, err := os.Lstat(filepath.Join(mount, filepath.FromSlash(to))); err == nil {
 				m.Why = "Something is already there"
 			}
@@ -586,6 +645,9 @@ func tidyApply(dir, uuid, mount string, ms []TidyMove) (int, error) {
 		u.Moves = append(u.Moves, m)
 		done++
 	}
+	if e := carryHashes(dir, uuid, mount, u.Moves[len(u.Moves)-done:], false); e != nil && err == nil {
+		err = e
+	}
 	j, _ := json.MarshalIndent(u, "", "  ")
 	if e := os.WriteFile(filepath.Join(dir, tidyUndoFile), j, 0o600); e != nil && err == nil {
 		err = e
@@ -613,10 +675,54 @@ func tidyRevert(dir, mount string, u tidyUndo) (int, error) {
 		}
 		n++
 	}
+	carryHashes(dir, u.UUID, mount, u.Moves, true)
 	for i := len(u.Made) - 1; i >= 0; i-- {
 		os.Remove(filepath.Join(mount, filepath.FromSlash(u.Made[i]))) // only if empty
 	}
 	return n, os.Remove(filepath.Join(dir, tidyUndoFile))
+}
+
+// carryHashes keeps the byte-for-byte checks of the files the moves renamed (fullhash.tsv): a rename changes their
+// path, not their bytes, size or modification time, so their hash is written again under the new path. back: the
+// moves are being undone, newest first.
+func carryHashes(dir, uuid, mount string, ms []TidyMove, back bool) error {
+	file := filepath.Join(dir, "disks", uuid, "fullhash.tsv")
+	b, err := os.ReadFile(file)
+	if err != nil || len(ms) == 0 {
+		return nil // nothing checked on this drive yet
+	}
+	var add strings.Builder
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		c := strings.Split(line, "\t")
+		if len(c) != 4 {
+			continue
+		}
+		p := c[1]
+		for i := range ms {
+			m := ms[i]
+			from, to := m.From, m.To
+			if back {
+				m = ms[len(ms)-1-i]
+				from, to = m.To, m.From
+			}
+			old := filepath.Join(mount, filepath.FromSlash(from))
+			if p == old || strings.HasPrefix(p, old+string(filepath.Separator)) {
+				p = filepath.Join(mount, filepath.FromSlash(to)) + p[len(old):]
+			}
+		}
+		if p != c[1] {
+			fmt.Fprintf(&add, "%s\t%s\t%s\t%s\n", c[0], p, c[2], c[3])
+		}
+	}
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err = f.WriteString(add.String()); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func readUndo(dir string) (tidyUndo, bool) {
@@ -759,7 +865,7 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 			http.Error(w, err.Error(), 502)
 			return
 		}
-		ms = validTidy(mount, ms)
+		ms = validTidy(mount, a.catalog().device(b.UUID).Excluded, ms)
 		a.smu.Lock()
 		if a.tidy == nil {
 			a.tidy = map[string][]TidyMove{}
@@ -793,7 +899,7 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 			}
 		}
 		var ok []TidyMove
-		for _, m := range validTidy(mount, pick) {
+		for _, m := range validTidy(mount, a.catalog().device(b.UUID).Excluded, pick) {
 			if m.OK {
 				ok = append(ok, m)
 			}

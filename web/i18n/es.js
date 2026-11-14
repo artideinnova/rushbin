@@ -557,6 +557,8 @@ I18N.words({
   "Into its own folder": "Dentro de su propia carpeta",
   "No longer in that place": "Ya no está en ese lugar",
   "Something is already there": "Ya hay algo ahí",
+  "In a folder this drive's catalog skips": "En una carpeta que el catálogo de este disco omite",
+  "A file keeps its name": "Un archivo conserva su nombre",
   "Same destination as another move": "Mismo destino que otro traslado",
   "Overlaps another move": "Se solapa con otro traslado",
   "Into a folder that also moves": "Dentro de una carpeta que también se mueve",

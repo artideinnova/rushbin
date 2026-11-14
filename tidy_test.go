@@ -30,7 +30,7 @@ func TestValidTidy(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		must(t, os.Symlink(out, filepath.Join(m, "L")))
 	}
-	ms := validTidy(m, []TidyMove{
+	ms := validTidy(m, nil, []TidyMove{
 		{From: "A", To: "Projects/2026-11-06/A"},             // 0 overlaps 11
 		{From: "../etc", To: "X"},                            // 1 outside
 		{From: "B", To: "/tmp/B"},                            // 2 absolute
@@ -52,11 +52,11 @@ func TestValidTidy(t *testing.T) {
 			t.Errorf("move %d %s -> %s: ok %v (%s)", i, m.From, m.To, m.OK, m.Why)
 		}
 	}
-	if got := validTidy(m, []TidyMove{{From: "A", To: "Projects/2026-11-06/A"}}); !got[0].OK {
+	if got := validTidy(m, nil, []TidyMove{{From: "A", To: "Projects/2026-11-06/A"}}); !got[0].OK {
 		t.Errorf("a plain move refused: %s", got[0].Why)
 	}
 	if runtime.GOOS != "windows" {
-		if got := validTidy(m, []TidyMove{{From: "loose.mov", To: "L/loose.mov"}}); got[0].Why != "Path outside the drive" {
+		if got := validTidy(m, nil, []TidyMove{{From: "loose.mov", To: "L/loose.mov"}}); got[0].Why != "Path outside the drive" {
 			t.Errorf("through a symlink out of the drive: %q", got[0].Why)
 		}
 	}
@@ -64,7 +64,7 @@ func TestValidTidy(t *testing.T) {
 
 func TestTidyApplyUndo(t *testing.T) {
 	m, dir := tidyDrive(t), t.TempDir()
-	ms := validTidy(m, []TidyMove{{From: "A", To: "P/2026/CamA"}, {From: "loose.mov", To: "P/2026/loose.mov"}})
+	ms := validTidy(m, nil, []TidyMove{{From: "A", To: "P/2026/CamA"}, {From: "loose.mov", To: "P/2026/loose.mov"}})
 	for _, x := range ms {
 		if !x.OK {
 			t.Fatalf("refused: %+v", x)
@@ -180,7 +180,7 @@ func TestTidyFlow(t *testing.T) {
 	if len(ms) != 2 || !ms[0].OK || ms[1].OK || ms[0].Reason != "camera card folder" {
 		t.Fatalf("plan = %+v", ms)
 	}
-	if !strings.Contains(sent, `"claude-opus-5-5"`) || !strings.Contains(sent, `"output_config":{"format":{"schema"`) || !strings.Contains(sent, "C0001.MP4") || !strings.Contains(sent, "A###_C####.mov 13") ||
+	if !strings.Contains(sent, `"claude-opus-5-5"`) || !strings.Contains(sent, `"output_config":{"format":{"schema"`) || !strings.Contains(sent, "C0001.MP4") || !strings.Contains(sent, "A001_C0000.mov … A001_C0012.mov (13)") ||
 		strings.Contains(sent, "SECRETCONTENT") || strings.Contains(sent, key) || strings.Contains(sent, "old.mov") {
 		t.Fatalf("request body: %s", sent)
 	}
