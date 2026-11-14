@@ -24,11 +24,14 @@ func TestApp(t *testing.T) {
 	ffmpeg(t, "testsrc2=duration=2:size=320x240:rate=25", filepath.Join(a, "P", "other.mp4"))
 	copyFile(t, filepath.Join(a, "P", "clip.mp4"), filepath.Join(a, "P", "copy.mp4"))
 	copyFile(t, filepath.Join(a, "P", "clip.mp4"), filepath.Join(b, "C", "clip.mp4"))
-	scanned(t, cat, a, "A", "", nil)
-	scanned(t, cat, b, "B", "", nil)
+	for _, d := range [][2]string{{a, "A"}, {b, "B"}} { // as the app scans: no file read whole
+		if _, err := scan(cat, d[0], d[1], "", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	app := &App{dir: cat, token: "secret", mounted: map[string]string{"A": a, "B": b}, seen: map[string]string{},
-		ignored: map[string]bool{}, queue: make(chan string, 64)}
+		ignored: map[string]bool{}, queue: make(chan string, 64), verifyNow: make(chan struct{}, 1)}
 	must(t, app.reload())
 	srv := httptest.NewServer(app.guard(app.routes()))
 	defer srv.Close()
@@ -62,14 +65,8 @@ func TestApp(t *testing.T) {
 
 	var dups []Group
 	get("/api/dups", &dups)
-	if len(dups) != 1 || dups[0].Copies != 3 || !dups[0].Verified {
-		t.Fatalf("dups = %+v, want one verified group of 3", dups)
-	}
-	var cmp Comparison
-	get("/api/compare?a=A&b=B", &cmp)
-	if cmp.Both.Clips != 1 || cmp.Verified != 1 || cmp.OnlyA.Clips != 1 || cmp.OnlyA.List[0].Name != "other.mp4" || cmp.OnlyB.Clips != 0 ||
-		cmp.UniqueA.Clips != 1 || cmp.UniqueB.Clips != 0 {
-		t.Fatalf("compare A and B = %+v", cmp)
+	if len(dups) != 1 || dups[0].Copies != 3 || dups[0].Verified {
+		t.Fatalf("dups = %+v, want one group of 3, not verified yet", dups)
 	}
 	// A drive's heavy work turned off shows at once (the catalog is reloaded before the answer).
 	if code := post("/api/drives", `{"uuid":"B","action":"options","content":false}`, true); code != 200 {
@@ -121,7 +118,26 @@ func TestApp(t *testing.T) {
 			t.Fatalf("decide %s: %d", d, code)
 		}
 	}
+	// The copies wait for the check byte for byte, which runs only when asked: then the trash can take them.
 	var plan []Move
+	get("/api/plan", &plan)
+	for _, m := range plan {
+		if m.OK != (m.Reason == "discarded") || !m.OK && m.Why != whyUnverified {
+			t.Fatalf("before the check: %+v", m)
+		}
+	}
+	if code := post("/api/verify", "", true); code != 200 {
+		t.Fatalf("verify: %d", code)
+	}
+	<-app.verifyNow // what the scanner does
+	app.verify()
+	get("/api/dups", &dups)
+	var cmp Comparison
+	get("/api/compare?a=A&b=B", &cmp)
+	if !dups[0].Verified || cmp.Both.Clips != 1 || cmp.Verified != 1 || cmp.OnlyA.Clips != 1 || cmp.OnlyA.List[0].Name != "other.mp4" ||
+		cmp.OnlyB.Clips != 0 || cmp.UniqueA.Clips != 1 || cmp.UniqueB.Clips != 0 {
+		t.Fatalf("after the check: dups %+v, compare A and B %+v", dups, cmp)
+	}
 	get("/api/plan", &plan)
 	var from []string
 	for _, m := range plan {

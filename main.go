@@ -85,6 +85,9 @@ func main() {
 		os.Exit(2)
 	}
 	drive, err := scan(*catalog, f.Arg(0), *id, *name, f.Args()[1:])
+	if err == nil {
+		err = checkDuplicates(*catalog, drive, filepath.Base(f.Arg(0)))
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "rushbin:", err)
 		os.Exit(1)

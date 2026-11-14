@@ -43,6 +43,7 @@ type App struct {
 	pending    []Pending
 	ignored    map[string]bool
 	status     string
+	rev        int64  // counts the catalog reloads: the page reads the catalog again when it moves
 	background string // long work that does not stop the app, like the proxies for the team
 	signedOut  bool   // the team site no longer accepts this computer's token: the page asks to sign in again
 	dlDone     int64  // bytes of the model being downloaded so far (ensureModels)
@@ -54,6 +55,7 @@ type App struct {
 	done       int64           // how far the step is: files, bytes or clips
 	total      int64           // 0 when not known in advance
 	queue      chan string
+	verifyNow  chan struct{}   // the page asked to check the copies the trash waits for (App.verify)
 	queued     map[string]bool // mount path → a scan of it waits in queue
 
 	wmu    sync.Mutex // serializes decision writes and trash moves
@@ -142,7 +144,7 @@ type Pending struct {
 
 func runApp(dir, addr string) error {
 	a := &App{dir: dir, volumes: "/Volumes", mounted: map[string]string{}, seen: map[string]string{},
-		ignored: map[string]bool{}, queue: make(chan string, 64), shareNow: make(chan struct{}, 1)}
+		ignored: map[string]bool{}, queue: make(chan string, 64), shareNow: make(chan struct{}, 1), verifyNow: make(chan struct{}, 1)}
 	if err := os.MkdirAll(filepath.Join(dir, "thumbs"), 0o755); err != nil {
 		return err
 	}
@@ -197,6 +199,13 @@ func (a *App) routes() http.Handler {
 	m.HandleFunc("GET /live/{id}/{file}", a.serveLive)
 	m.HandleFunc("POST /api/decide", a.decide)
 	m.HandleFunc("POST /api/apply", a.apply)
+	m.HandleFunc("POST /api/verify", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case a.verifyNow <- struct{}{}:
+		default: // already asked: one check covers it
+		}
+		send(w, map[string]bool{"ok": true})
+	})
 	m.HandleFunc("POST /api/reveal", a.reveal)
 	m.HandleFunc("POST /api/drives", a.drives)
 	m.HandleFunc("GET /api/folders", a.folders)
@@ -272,6 +281,9 @@ func (a *App) reload() error {
 	a.mu.Lock()
 	a.cat = c
 	a.mu.Unlock()
+	a.smu.Lock()
+	a.rev++
+	a.smu.Unlock()
 	return nil
 }
 
@@ -428,6 +440,35 @@ func (a *App) plan() []Move {
 	return ms
 }
 
+// whyUnverified: a copy waits for the check byte for byte, which the page asks for (App.verify).
+const whyUnverified = "Copies not yet verified byte for byte"
+
+// verify reads byte for byte the copies the trash waits for: every copy, on a connected drive, of each content
+// the plan cannot move yet because its copies are not verified. Only when asked: reading them whole takes long.
+// The scanner runs it, so it never reads a drive at the same time as a scan.
+func (a *App) verify() {
+	c, byDrive, done := a.catalog(), map[string][]string{}, map[string]bool{}
+	for _, m := range a.plan() {
+		if m.Why != whyUnverified || done[m.Content] {
+			continue
+		}
+		done[m.Content] = true
+		for _, cl := range c.byCont[m.Content] {
+			if cl.FullHash == "" && c.device(cl.Device).Online && fileExists(cl.Path) {
+				byDrive[cl.Device] = append(byDrive[cl.Device], cl.Path)
+			}
+		}
+	}
+	for id, paths := range byDrive {
+		say("%s: checking %d possible duplicates byte for byte", c.device(id).Name, len(paths))
+		if err := fullHash(paths, filepath.Join(a.dir, "disks", id, "fullhash.tsv")); err != nil {
+			log.Printf("verify %s: %v", id, err)
+		}
+	}
+	a.reload()
+	a.setStatus("")
+}
+
 func (a *App) check(c *Catalog, m Move, mount string, cl *Clip, keep string) string {
 	if _, err := os.Stat(mount); err != nil || !c.device(cl.Device).Online {
 		return "Drive not connected"
@@ -438,7 +479,7 @@ func (a *App) check(c *Catalog, m Move, mount string, cl *Clip, keep string) str
 	}
 	if m.Reason == "copy" {
 		if !c.group(cl.Content).Verified {
-			return "Copies not yet verified byte for byte"
+			return whyUnverified
 		}
 		k := c.byKey[keep]
 		if k == nil || !c.device(k.Device).Online || !fileExists(k.Path) {
@@ -542,7 +583,7 @@ func (a *App) statusHandler(w http.ResponseWriter, r *http.Request) {
 	paused, need, content := a.pause(false), a.modelsNeeded(), a.catalog().contentDone(filepath.Join(a.dir, "thumbs"))
 	a.smu.Lock()
 	defer a.smu.Unlock()
-	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total,
+	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev,
 		"background": a.background, "unreadable": append([]Pending{}, a.unreadable...), "paused": paused, "content": content,
 		"models": map[string]any{"need": need, "done": a.dlDone, "error": a.dlErr}})
 }
@@ -834,6 +875,9 @@ func (a *App) scanner() {
 		case <-a.shareNow:
 			a.share()
 			continue
+		case <-a.verifyNow:
+			a.verify()
+			continue
 		default:
 		}
 		why := a.pause(false)
@@ -877,6 +921,8 @@ func (a *App) scanner() {
 				a.share()
 			case <-a.shareNow:
 				a.share()
+			case <-a.verifyNow:
+				a.verify()
 			case <-time.After(time.Minute):
 			}
 		}

@@ -152,7 +152,10 @@ func copyFile(t *testing.T, from, to string) {
 
 func scanned(t *testing.T, cat, vol, id, name string, excluded []string) {
 	t.Helper()
-	if _, err := scan(cat, vol, id, name, excluded); err != nil {
+	if _, err := scan(cat, vol, id, name, excluded); err != nil { // as the command line scans: duplicates read whole
+		t.Fatal(err)
+	}
+	if err := checkDuplicates(cat, id, name); err != nil {
 		t.Fatal(err)
 	}
 }

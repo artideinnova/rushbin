@@ -862,11 +862,13 @@ function nextTile() { const tiles = $$('.tile').map(x => +x.dataset.i); return t
 
 /* ---------- Trash: review and move ---------- */
 let PLAN = [];
+// A copy that waits for the check byte for byte, which runs only when asked (reading files whole takes long).
+const unverified = m => !m.ok && m.why === 'Copies not yet verified byte for byte';
 async function refreshTray() {
   try { PLAN = await api('/api/plan'); } catch { return; }
-  const ok = PLAN.filter(m => m.ok), tr = $('#tray');
-  $('#traytext').innerHTML = t('tray.text', { n: ok.length, size: bytes(ok.reduce((a, m) => a + num(m.size), 0)) });
-  tr.classList.toggle('show', ok.length > 0 && !$('#veil').classList.contains('open'));
+  const ok = PLAN.filter(m => m.ok), wait = PLAN.filter(unverified), tr = $('#tray'), sum = a => bytes(a.reduce((x, m) => x + num(m.size), 0));
+  $('#traytext').innerHTML = ok.length ? t('tray.text', { n: ok.length, size: sum(ok) }) : t('tray.verify', { n: wait.length, size: sum(wait) });
+  tr.classList.toggle('show', ok.length + wait.length > 0 && !$('#veil').classList.contains('open'));
 }
 function mvRow(m) {
   return `<div class="mv"><img loading="lazy" src="${thumb(thumbOf(m.content))}" alt=""><div><b>${esc(m.name)}</b>
@@ -874,7 +876,8 @@ function mvRow(m) {
 }
 async function openPlan() {
   await refreshTray();
-  const ok = PLAN.filter(m => m.ok), copies = ok.filter(m => m.reason === 'copy'), scarti = ok.filter(m => m.reason === 'discarded'), blocked = PLAN.filter(m => !m.ok);
+  const ok = PLAN.filter(m => m.ok), copies = ok.filter(m => m.reason === 'copy'), scarti = ok.filter(m => m.reason === 'discarded'),
+    wait = PLAN.filter(unverified), blocked = PLAN.filter(m => !m.ok && !unverified(m));
   const sum = a => bytes(a.reduce((x, m) => x + num(m.size), 0));
   const disks = [...new Set(ok.map(m => m.disk))].join(', ');
   const sheet = $('#sheet'); sheet.className = 'sheet plan';
@@ -884,6 +887,9 @@ async function openPlan() {
     <p class="sub">${ok.length ? t('plan.sub', { drives: esc(disks), finder: FINDER() }) : t('plan.empty')}</p>
     ${copies.length ? `<div class="card"><h4>${t('plan.copies', { n: copies.length, size: sum(copies) })}</h4>${copies.map(mvRow).join('')}</div>` : ''}
     ${scarti.length ? `<div class="card"><h4>${t('plan.discarded', { n: scarti.length, size: sum(scarti) })}</h4>${scarti.map(mvRow).join('')}</div>` : ''}
+    ${wait.length ? `<div class="card"><h4>${t('plan.verify', { n: wait.length, size: sum(wait) })}</h4><p class="sub">${t('plan.verifySub')}</p>
+      <div class="cmp-row"><button class="act${ok.length ? '' : ' primary'}" data-verify>${t('plan.verifyGo')}</button></div>
+      <details><summary>${t('plan.verifyList')}</summary>${wait.map(mvRow).join('')}</details></div>` : ''}
     ${blocked.length ? `<details class="card"><summary>${t('plan.blocked', { n: blocked.length })}</summary>${blocked.map(mvRow).join('')}</details>` : ''}
     ${ok.length ? `<div class="go"><button class="act primary" data-apply>${t('plan.move', { n: ok.length })}</button><button class="act" data-close>${t('cancel')}</button></div>` : ''}
   </div>`;
@@ -895,7 +901,7 @@ async function applyPlan(btn) {
   let res; try { res = await post('/api/apply'); } catch (e) { btn.textContent = e.message; return; }
   const go = btn.parentElement;
   go.innerHTML = `<p style="margin:0"><b>${t('plan.moved', { n: num(res.moved), size: bytes(res.bytes) })}</b> ${res.failed ? t('plan.failed', { n: num(res.failed) }) : ''}${t('plan.rescan')}</p><button class="act" data-close>${t('close')}</button>`;
-  OV = await api('/api/overview').catch(() => OV);
+  await loadOV().catch(() => {});
   show(S.view);
 }
 
@@ -905,6 +911,7 @@ $('#veil').addEventListener('click', e => {
   const ws = e.target.closest('[data-wstart]'); if (ws) return startWizard(ws);
   const wf = e.target.closest('[data-wfolders]'); if (wf) return openFolders(wf.dataset.wfolders, true);
   const ap = e.target.closest('[data-apply]'); if (ap) return applyPlan(ap);
+  if (e.target.closest('[data-verify]')) return post('/api/verify').then(() => { closeClip(); toast(t('toast.verify')); poll(); }, err => toast(err.message));
   const ta = e.target.closest('[data-tidyapply]'); if (ta) return tidyApply(ta);
   const vb = e.target.closest('[data-vote]'); if (vb) return vote(sel, vb.dataset.vote);
   const lb = e.target.closest('[data-label]'); if (lb) { closeClip(); return addToken({ type: 'label', value: lb.dataset.label, text: pretty(lb.dataset.label), label: t('label.seen') }); }
@@ -1439,26 +1446,27 @@ async function poll() {
   if (st.status) $('#stat').innerHTML = `<span class="scanbar">${esc(I18N.from(st.status))}${pct !== null && st.step === 2 ? `, ${pct}%` : ''}</span>`;
   if (st.status && !OV?.devices.length) catalogProgress(st, pct);
   if (STATUS && !st.status) refresh();
-  if (st.version !== undefined && VERSION !== undefined && st.version !== VERSION) refresh(); // the team site got new data
-  VERSION = st.version;
+  if (st.version !== undefined && st.version !== VERSION) refresh(); // the catalog changed: drives connected or scanned, the team site got new data
   STATUS = st.status;
 }
 // The first catalog of a drive: which of the 4 steps is running and how far it is.
-const STEPS = [t('step.read'), t('step.check'), t('step.previews'), t('step.look')];
+const STEPS = { 1: [1, t('step.read')], 3: [2, t('step.previews')], 4: [3, t('step.look')] }; // step → its place and name
 function catalogProgress(st, pct) {
   if (!$('#catprog')) $('#view').innerHTML = `<div class="empty" id="catprog" role="status"><h2>${t('cat.title')}</h2>
     <p class="step"></p><div class="progress" role="progressbar" aria-label="${t('cat.progress')}"><i></i></div><p class="scanbar detail"></p>
     <p>${t('cat.note')}</p></div>`;
   const box = $('#catprog'), bar = $('.progress', box), k = num(st.step);
-  $('.step', box).textContent = k ? t('cat.step', { k, step: STEPS[k - 1] }) : I18N.from(st.status);
+  $('.step', box).textContent = STEPS[k] ? t('cat.step', { k: STEPS[k][0], step: STEPS[k][1] }) : I18N.from(st.status);
   bar.classList.toggle('indet', pct === null);
   $('i', bar).style.width = pct === null ? '' : pct + '%';
   if (pct === null) bar.removeAttribute('aria-valuenow'); else bar.setAttribute('aria-valuenow', pct);
   $('.detail', box).textContent = k === 1 ? t('cat.read', { n: num(st.done) })
-    : k === 2 && st.total ? t('cat.checked', { done: bytes(st.done), size: bytes(st.total), pct })
     : k >= 3 ? t('cat.of', { done: num(st.done), clips: clips(st.total), pct }) : '';
 }
-async function refresh() { try { OV = await api('/api/overview'); } catch {} show(S.view); refreshTray(); }
+// loadOV reads the catalog, and the version it is at no earlier than that: a later change moves the version, and poll
+// reads it again (drives found or scanned while the page was already open).
+async function loadOV() { const st = await api('/api/status').catch(() => null); OV = await api('/api/overview'); if (st) VERSION = st.version; }
+async function refresh() { try { await loadOV(); } catch {} show(S.view); refreshTray(); }
 $('#banner').addEventListener('click', e => { if (e.target.closest('[data-wopen]')) { $('#banner').classList.remove('show'); openWizard(); } });
 $('#view').addEventListener('click', async e => {
   const f = e.target.closest('[data-folders]'); if (f) return openFolders(f.dataset.folders, false);
@@ -1556,7 +1564,7 @@ async function setUpdates(ask) {
   try { await post('/api/updates', { ask }); ME.updates = ask; } catch (e) { toast(e.message); }
 }
 
-api('/api/me').then(m => { ME = m; askUpdates(); if (m.team?.signed_out) signedOutNote(); if (m.update) updateNote(m.update); if (m.backup) backupNote(m.backup); }).catch(() => {}).then(() => api('/api/overview')).then(o => { OV = o; PAIR ? show('team') : o.devices.length ? show('archive') : ($('#view').innerHTML = emptyCatalog()); refreshTray(); poll(); })
+api('/api/me').then(m => { ME = m; askUpdates(); if (m.team?.signed_out) signedOutNote(); if (m.update) updateNote(m.update); if (m.backup) backupNote(m.backup); }).catch(() => {}).then(loadOV).then(() => { const o = OV; PAIR ? show('team') : o.devices.length ? show('archive') : ($('#view').innerHTML = emptyCatalog()); refreshTray(); poll(); })
   .catch(e => { $('#view').innerHTML = errorBox(e.message); });
 </script>
 </body>

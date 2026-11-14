@@ -155,13 +155,18 @@ func scan(catalog, vol, id, name string, excluded []string) (string, error) {
 		return "", err
 	}
 	say("%s: %d files read in %s", d.Name, n, time.Since(start).Round(time.Second))
+	return d.UUID, nil
+}
 
-	todo, err := candidates(catalog, d.UUID)
+// checkDuplicates reads byte for byte every file of drive id whose sample matches a file anywhere in the catalog
+// (the command line; the app reads only the copies the trash waits for, when asked: App.verify).
+func checkDuplicates(catalog, id, name string) error {
+	todo, err := candidates(catalog, id)
 	if err != nil {
-		return "", err
+		return err
 	}
-	say("%s: checking %d possible duplicates byte for byte", d.Name, len(todo))
-	return d.UUID, fullHash(todo, filepath.Join(dir, "fullhash.tsv"))
+	say("%s: checking %d possible duplicates byte for byte", name, len(todo))
+	return fullHash(todo, filepath.Join(catalog, "disks", id, "fullhash.tsv"))
 }
 
 // identify reads the volume identity: diskutil on macOS, the volume serial number on Windows.
