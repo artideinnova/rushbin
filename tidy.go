@@ -37,6 +37,7 @@ type TidyMove struct {
 	Reason string `json:"reason"`
 	OK     bool   `json:"ok"`
 	Why    string `json:"why,omitempty"`
+	Kind   string `json:"kind,omitempty"` // what moves, from what made it (tidyKind): export, audio, footage, project, graphics, other
 }
 
 const (
@@ -118,10 +119,10 @@ func siteAI() (AI, error) {
 const tidySystem = `You reorganize a video production drive the way a good assistant editor or DIT would. You get a description of its folders: per folder the files, size, types, every file name directly in it (a numbered sequence, like a camera's clips, shown as first … last with its count), what made its files when known ("made": camera and model, sound recorder, export from an editing app, preview of an editing app; a "?" means deduced from names and folders, not read from the files), clip durations, codecs and dates.
 How footage is kept in post-production, which your moves follow:
 1. A camera card or a clip is never split. A folder of camera originals moves whole, with what sits next to its clips (XML sidecars, .rtn, the .wav of a RED clip, .RDC folders, BPAV, CLIP, PRIVATE, DCIM). Never move single files out of it.
-2. Each project keeps apart its original footage (by camera or by day), its sound recordings, its editing project files (with their autosaves and render previews), and its exports (all versions of one piece together, grouped by subject when the names show one).
-3. Exports from an editing app lying loose among originals or at a project's top level belong in that project's exports folder.
+2. Each project keeps apart, in folders with the standard post-production names used in every country: Footage (camera originals, by camera or by day), Audio (sound recordings), Project (editing project files with their autosaves and render previews), Graphics (stills, titles, logos) and Export (what the editing apps exported). If the project already has a folder for one of these under another name (XPORT, Esportati, Audio, RAW), keep using it.
+3. Inside Export, each piece has its own folder named after it, holding all its versions and its subtitle files: Export/Sayf/ for Sayf.mp4, Sayf v2.mp4, Sayf v4.mp4. The description lists these "series" (versions of one piece, found by rushbin from their names): follow them. A piece with a single file still gets its own folder only when other pieces do.
 4. Editing projects (.prproj, .drp, .fcpbundle, .avb, .aep) find their media by path: moving original footage they use breaks their links. Prefer moving exports and loose files; move originals only when clearly misplaced, and then say in the reason that the editing project will need relinking.
-5. Never change a file's name, only its folder. New folders take names in the language the drive's folders already use.
+5. Never change a file's name, only its folder.
 6. Keep what is already clear where it is: no move without a reason a producer would agree with.
 Rules: never delete anything; paths are relative to the drive root with forward slashes; every move takes an existing path listed in the description; never move into or out of _rushbin_trash; never move a folder into itself; no two moves to the same destination; do not move both a folder and something inside it. Give each move a one-line reason. Answer with only a JSON object {"moves": [{"from": "...", "to": "...", "reason": "..."}]}, with an empty list if the drive is already tidy.`
 
@@ -313,6 +314,7 @@ func describe(c *Catalog, uuid, mount string) (string, error) {
 		size     int64
 		types    map[string]int
 		names    []string // the files directly in it
+		pieces   []string // those of them that are exports (or say nothing of what made them): grouped in series
 		made     map[string]int
 		dur      float64
 		codecs   map[string]int
@@ -363,6 +365,9 @@ func describe(c *Catalog, uuid, mount string) (string, error) {
 		g.types[strings.ToLower(strings.TrimPrefix(path.Ext(rel), "."))]++
 		if path.Dir(rel) == folderOf(rel) { // directly in the folder listed, not summed from deeper ones
 			g.names = append(g.names, d.Name())
+			if k := fileKind(p, c.files[p].Made); k == "export" || k == "other" {
+				g.pieces = append(g.pieces, d.Name())
+			}
 		}
 		if m := c.files[p].Made; m != "" {
 			g.made[m]++
@@ -443,6 +448,9 @@ func describe(c *Catalog, uuid, mount string) (string, error) {
 			if len(g.names) > 0 {
 				line += "; files: " + listNames(g.names)
 			}
+			if s := series(g.pieces); s != "" {
+				line += "; series: " + s
+			}
 			if len(g.made) > 0 {
 				line += "; made: " + top(g.made, 6)
 			}
@@ -475,6 +483,101 @@ func describe(c *Catalog, uuid, mount string) (string, error) {
 }
 
 var digits = regexp.MustCompile(`[0-9]+`)
+
+// languageNames: the page's languages, named for the AI that writes the reasons of its moves.
+var languageNames = map[string]string{"en": "English", "it": "Italian", "es": "Spanish", "fr": "French", "de": "German",
+	"pt-BR": "Brazilian Portuguese", "ja": "Japanese"}
+
+// tidyKind is what a move takes, from what made its files (made.go) and their types: export, audio, footage,
+// project, graphics or other. A folder is the kind most of its files are. The review groups and approves by it.
+func tidyKind(c *Catalog, mount, from string) string {
+	abs := filepath.Join(mount, filepath.FromSlash(from))
+	st, err := os.Lstat(abs)
+	if err != nil {
+		return "other"
+	}
+	if !st.IsDir() {
+		return fileKind(abs, c.files[abs].Made)
+	}
+	n := map[string]int{}
+	filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && !strings.HasPrefix(d.Name(), ".") {
+			n[fileKind(p, c.files[p].Made)]++
+		}
+		return nil
+	})
+	best := "other"
+	for k, v := range n {
+		if k != "other" && (best == "other" || v > n[best] || v == n[best] && k < best) {
+			best = k
+		}
+	}
+	return best
+}
+
+func fileKind(p, made string) string {
+	switch madeKind(made) {
+	case "export", "preview":
+		return "export"
+	case "recorder":
+		return "audio"
+	case "camera":
+		return "footage"
+	}
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".wav", ".mp3", ".aif", ".aiff", ".m4a", ".bwf", ".flac":
+		return "audio"
+	case ".prproj", ".prin", ".drp", ".drt", ".aep", ".fcpbundle", ".fcpxml", ".avb", ".avp", ".edl", ".otio":
+		return "project"
+	case ".png", ".jpg", ".jpeg", ".psd", ".ai", ".svg", ".tif", ".tiff", ".eps", ".mogrt", ".pdf":
+		return "graphics"
+	case ".ttml", ".srt", ".vtt", ".scc":
+		return "export" // subtitles go with their export
+	case ".r3d", ".nev", ".braw", ".ari", ".mxf", ".rtn", ".xml", ".rmd":
+		return "footage" // camera formats and their sidecars
+	}
+	return "other"
+}
+
+var (
+	nameSep     = regexp.MustCompile(`[\s_\-.()\[\]]+`)
+	versionMark = regexp.MustCompile(`(?i)^(v|ver|version|versione|rev)?\d+[a-z]?$|^[a-z]$|^\d{3,4}[px]\d{0,4}$|^(def|definitiv[oa]|final[e]?|master|prova|bozza|draft|rough|premontato|subtitle|sub)(v?\d+)?$`)
+)
+
+// piece is the name of the piece a file is a version of: its name without the marks of a version (v2, v04, DEF,
+// Prova, (1), 1080p, a lone letter or number). "" when nothing is left, as for a camera's numbered clips.
+func piece(name string) string {
+	var words []string
+	for _, w := range nameSep.Split(strings.TrimSuffix(name, path.Ext(name)), -1) {
+		if w != "" && !versionMark.MatchString(w) {
+			words = append(words, w)
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+// series lists the pieces with more than one file among names: "Sayf (Sayf.mp4, Sayf v2.mp4, Sayf v4.mp4)".
+func series(names []string) string {
+	by, order := map[string][]string{}, []string{}
+	for _, n := range slices.Sorted(slices.Values(names)) {
+		p := piece(n)
+		k := strings.ToLower(p)
+		if p == "" {
+			continue
+		}
+		if by[k] == nil {
+			order = append(order, p)
+		}
+		by[k] = append(by[k], n)
+	}
+	var out []string
+	for _, p := range order {
+		if fs := by[strings.ToLower(p)]; len(fs) > 1 {
+			out = append(out, p+" ("+strings.Join(fs, ", ")+")")
+		}
+	}
+	return strings.Join(out, "; ")
+}
 
 // folderOf is the folder a file is listed under in the description: its own, or its ancestor at tidyDepth.
 func folderOf(rel string) string {
@@ -622,7 +725,7 @@ type tidyUndo struct {
 // tidyApply renames the moves and writes the undo log; it stops at the first failure, the log keeps what was done.
 func tidyApply(dir, uuid, mount string, ms []TidyMove) (int, error) {
 	u := tidyUndo{UUID: uuid, At: time.Now().UTC().Format(time.RFC3339)}
-	if prev, ok := readUndo(dir); ok && prev.UUID == uuid { // a second tidy-up on the drive: Undo puts back both
+	if prev, ok := readUndo(dir, uuid); ok { // a second tidy-up on the drive: Undo puts back both
 		u.Moves, u.Made = prev.Moves, prev.Made
 	}
 	var err error
@@ -649,7 +752,8 @@ func tidyApply(dir, uuid, mount string, ms []TidyMove) (int, error) {
 		err = e
 	}
 	j, _ := json.MarshalIndent(u, "", "  ")
-	if e := os.WriteFile(filepath.Join(dir, tidyUndoFile), j, 0o600); e != nil && err == nil {
+	os.MkdirAll(filepath.Dir(undoFile(dir, uuid)), 0o755) // the drive's folder in the catalog, there after its first scan
+	if e := os.WriteFile(undoFile(dir, uuid), j, 0o600); e != nil && err == nil {
 		err = e
 	}
 	return done, err
@@ -670,7 +774,7 @@ func tidyRevert(dir, mount string, u tidyUndo) (int, error) {
 		if err != nil { // the log keeps what is still to put back
 			u.Moves = u.Moves[:i+1]
 			j, _ := json.MarshalIndent(u, "", "  ")
-			os.WriteFile(filepath.Join(dir, tidyUndoFile), j, 0o600)
+			os.WriteFile(undoFile(dir, u.UUID), j, 0o600)
 			return n, err
 		}
 		n++
@@ -679,7 +783,8 @@ func tidyRevert(dir, mount string, u tidyUndo) (int, error) {
 	for i := len(u.Made) - 1; i >= 0; i-- {
 		os.Remove(filepath.Join(mount, filepath.FromSlash(u.Made[i]))) // only if empty
 	}
-	return n, os.Remove(filepath.Join(dir, tidyUndoFile))
+	os.Remove(filepath.Join(dir, tidyUndoFile)) // as earlier versions kept it, when it was this drive's
+	return n, os.Remove(undoFile(dir, u.UUID))
 }
 
 // carryHashes keeps the byte-for-byte checks of the files the moves renamed (fullhash.tsv): a rename changes their
@@ -725,10 +830,18 @@ func carryHashes(dir, uuid, mount string, ms []TidyMove, back bool) error {
 	return f.Close()
 }
 
-func readUndo(dir string) (tidyUndo, bool) {
+// undoFile: each drive keeps the log of its last tidy-up, so tidying several drives keeps each one's undo.
+func undoFile(dir, uuid string) string {
+	return filepath.Join(dir, "disks", filepath.Base(uuid), tidyUndoFile)
+}
+
+func readUndo(dir, uuid string) (tidyUndo, bool) {
 	var u tidyUndo
-	b, err := os.ReadFile(filepath.Join(dir, tidyUndoFile))
-	return u, err == nil && json.Unmarshal(b, &u) == nil && len(u.Moves) > 0
+	b, err := os.ReadFile(undoFile(dir, uuid))
+	if err != nil { // earlier versions kept one, for the last drive tidied, in the catalog folder
+		b, err = os.ReadFile(filepath.Join(dir, tidyUndoFile))
+	}
+	return u, err == nil && json.Unmarshal(b, &u) == nil && u.UUID == uuid && len(u.Moves) > 0
 }
 
 func (a *App) tidyMount(uuid string) string {
@@ -779,9 +892,13 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 		if t, to := a.tidySite(r.URL.Query().Get("uuid")); t != nil { // without a drive: as for one sent to the team
 			res["site"], res["to"] = strings.TrimPrefix(strings.TrimPrefix(t.URL, "https://"), "http://"), to
 		}
-		if u, ok := readUndo(a.dir); ok {
-			res["undo"] = map[string]any{"uuid": u.UUID, "moves": len(u.Moves), "at": u.At}
+		undo := []map[string]any{} // the last tidy-up of each drive that can still be undone
+		for _, d := range a.catalog().Devices {
+			if u, ok := readUndo(a.dir, d.UUID); ok {
+				undo = append(undo, map[string]any{"uuid": u.UUID, "moves": len(u.Moves), "at": u.At})
+			}
 		}
+		res["undo"] = undo
 		send(w, res)
 	})
 	// ai saves the choice; an empty key keeps the saved one only for the same provider at the same address, and no
@@ -815,8 +932,8 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 	// page says which one the user agreed to.
 	m.HandleFunc("POST /api/tidy/propose", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {
-			UUID, Via string
-			Consent   bool
+			UUID, Via, Lang string
+			Consent         bool
 		}
 		json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&b)
 		mount := a.tidyMount(b.UUID)
@@ -853,6 +970,7 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		desc += "\nWrite every reason in " + cmp.Or(languageNames[b.Lang], "English") + ", the language of the person reading them."
 		var ms []TidyMove
 		if site != nil {
 			ts := *site
@@ -866,6 +984,9 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 			return
 		}
 		ms = validTidy(mount, a.catalog().device(b.UUID).Excluded, ms)
+		for i := range ms {
+			ms[i].Kind = tidyKind(a.catalog(), mount, ms[i].From)
+		}
 		a.smu.Lock()
 		if a.tidy == nil {
 			a.tidy = map[string][]TidyMove{}
@@ -915,9 +1036,11 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 		send(w, res)
 	})
 	m.HandleFunc("POST /api/tidy/undo", func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ UUID string }
+		json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&b)
 		a.wmu.Lock()
 		defer a.wmu.Unlock()
-		u, ok := readUndo(a.dir)
+		u, ok := readUndo(a.dir, b.UUID)
 		mount := a.tidyMount(u.UUID)
 		if !ok || mount == "" {
 			http.Error(w, "nothing to undo on a connected drive", 409)

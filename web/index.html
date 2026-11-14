@@ -243,6 +243,32 @@
   .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
   /* Decisions */
   .chip.sep { margin-left: 10px; }
+  input[type="checkbox"] { accent-color: var(--accent); }
+  .tbulk { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 18px; }
+  .tbulk > span { color: var(--ink-2); font-size: 13px; margin-right: 4px; }
+  .tbulk .chip .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .tbulk .chip[aria-pressed="true"] .n { color: inherit; }
+  .tgroup { border: 1px solid var(--glass-line); border-radius: 14px; background: rgba(255,255,255,.03); margin-bottom: 8px; }
+  .tgroup summary { display: grid; grid-template-columns: 24px minmax(0,1fr) auto auto; gap: 4px 12px; align-items: center; padding: 12px 16px; cursor: pointer; list-style: none; }
+  .tgroup summary::-webkit-details-marker { display: none; }
+  .tgroup[open] summary { border-bottom: 1px solid var(--glass-line); }
+  .tdest b { font-weight: 600; overflow-wrap: anywhere; }
+  .tdest em, .trow em { font-style: normal; color: var(--ink-3); }
+  .tdest em { margin-left: 8px; font-size: 13px; }
+  .tcount { color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .tkind { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--glass-line); color: var(--ink-2); }
+  .twhy, .twarn { grid-column: 2 / -1; font-size: 13px; color: var(--ink-3); }
+  .twarn { color: var(--amber); }
+  .trows { padding: 4px 16px 10px 52px; }
+  .trow { display: grid; grid-template-columns: 24px minmax(0,1fr); gap: 12px; align-items: start; padding: 7px 0; cursor: pointer; }
+  .trow + .trow { border-top: 1px solid var(--glass-line); }
+  .trow b { font-weight: 500; overflow-wrap: anywhere; }
+  .tpiece { padding: 12px 0 2px; }
+  .tpiece b { color: var(--accent); font-weight: 600; }
+  .tpiece em { display: block; font-style: normal; font-size: 12px; color: var(--ink-3); }
+  .tpiece + .trow { border-top: 0; }
+  .trow em { display: block; font-size: 12px; overflow-wrap: anywhere; }
+  .tgo { position: sticky; bottom: 0; padding: 16px 0 4px; background: linear-gradient(transparent, var(--bg) 35%); }
   .dupe .made { display: block; font-size: 12px; color: var(--ink-3); margin-top: 2px; }
   .vote { display: flex; gap: 6px; margin-bottom: 18px; }
   .vote button { flex: 1; height: 40px; border-radius: 999px; border: 1px solid var(--glass-line); background: rgba(255,255,255,.05); cursor: pointer; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: background .15s, color .15s; }
@@ -1082,12 +1108,12 @@ function renderDisks() {
 // Tidy up with AI: through the team site when it has an AI of its own, else with the AI the user picks under
 // Advanced (provider, model, key; base URL for an OpenAI-compatible server), kept only on this computer; the AI
 // proposes, the user ticks.
-let TIDY = {}, TPLAN = [];
+let TIDY = {}, TPLAN = {};
 const TIDY_PROVIDERS = ['anthropic', 'openai', 'gemini', 'compatible'];
 async function tidyBox() {
   TIDY = await api('/api/tidy').catch(() => ({}));
   const box = $('#tidybox'); if (!box) return; // looked up after the wait: the view may have been drawn again
-  const u = TIDY.undo, d = u && OV.devices.find(x => x.uuid === u.uuid), ai = TIDY.ai || {};
+  const ai = TIDY.ai || {}, online = OV.devices.filter(d => d.online && !d.retired);
   box.innerHTML = `<h4>${t('tidy.title')}</h4><p class="sub">${t('tidy.sub')}${TIDY.site ? t('tidy.viaSite', { site: esc(TIDY.site), to: esc(TIDY.to) }) : TIDY.ready ? t('tidy.to', { to: esc(TIDY.to) }) : ''}${
       OV.devices.some(x => x.local === true) && TIDY.site ? t(TIDY.ready ? 'tidy.localReady' : 'tidy.localKey', { pc: PC() }) : ''}</p>
     ${TIDY.site && !OV.devices.some(x => x.local === true) ? '' : `<details><summary>${t('tidy.advanced')}</summary><p class="sub">${t('tidy.advSub')}</p>
@@ -1096,7 +1122,8 @@ async function tidyBox() {
     <label for="tidymodel">${t('tidy.model')}</label><input id="tidymodel" autocomplete="off" value="${esc(ai.model || '')}">
     <label for="tidykey">${t('tidy.key')}</label><input id="tidykey" type="password" autocomplete="off"></div>
     <div class="cmp-row" style="margin-top:12px"><button class="act" data-tidyai>${t('save')}</button>${ai.provider ? `<button class="act" data-tidyai data-clear>${t('remove')}</button>` : ''}</div></details>`}
-    ${u ? `<p class="sub" style="margin-top:12px">${t('tidy.last', { n: num(u.moves), drive: esc(d?.name || t('tidy.aDrive')) })} <button class="act" data-tidyundo>${t('tidy.undo')}</button></p>` : ''}`;
+    ${online.length > 1 ? `<div class="cmp-row" style="margin-top:12px"><button class="act primary" data-tidy="all">${t('tidy.all')}</button></div>` : ''}
+    ${(TIDY.undo || []).map(u => `<p class="sub" style="margin-top:12px">${t('tidy.last', { n: num(u.moves), drive: esc(OV.devices.find(x => x.uuid === u.uuid)?.name || t('tidy.aDrive')) })} <button class="act" data-tidyundo="${esc(u.uuid)}">${t('tidy.undo')}</button></p>`).join('')}`;
   tidyProv(false);
 }
 // tidyProv fits the fields to the chosen provider: its default model when the choice changes, the base URL only for
@@ -1109,46 +1136,106 @@ function tidyProv(changed) {
   $('#tidyurlrow').hidden = p !== 'compatible';
   $('#tidykey').placeholder = saved && ai.key ? t('tidy.keySaved') : p === 'compatible' ? t('tidy.keyOptional') : t('tidy.key');
 }
+// Tidy up with AI on one drive, or on every connected one (data-tidy="all"). The review groups the moves by
+// drive and folder of arrival and approves them by kind at once (tidyKind in tidy.go). Camera originals start
+// unticked: moving them breaks the links of an editing project that uses them.
+const TIDY_KINDS = ['footage', 'export', 'audio', 'project', 'graphics', 'other'];
+const KIND_NAME = { export: t('kind.export'), audio: t('kind.audio'), footage: t('kind.footage'), project: t('kind.project'), graphics: t('kind.graphics'), other: t('kind.other') };
 async function tidyStart(b) {
-  const label = b.textContent; b.disabled = true; b.textContent = t('tidy.asking');
-  TIDY = await api('/api/tidy?uuid=' + encodeURIComponent(b.dataset.tidy)).catch(() => ({})); // which way to the AI, for this drive: the confirmation names it
-  if (!TIDY.site && !TIDY.ready) {
-    const kept = OV.devices.find(x => x.uuid === b.dataset.tidy)?.local === true;
-    b.disabled = false; b.textContent = label; toast(kept ? t('tidy.keptToast', { pc: PC() }) : t('tidy.needKey'));
-    const adv = $('#tidybox details'); if (adv) adv.open = true; $('#tidykey')?.focus(); return;
+  const label = b.textContent, drives = b.dataset.tidy === 'all'
+    ? OV.devices.filter(d => d.online && !d.retired).map(d => ({ uuid: d.uuid, name: d.name })) : [{ uuid: b.dataset.tidy, name: b.dataset.name }];
+  b.disabled = true; TPLAN = {};
+  for (const [i, d] of drives.entries()) {
+    b.textContent = drives.length > 1 ? t('tidy.askingDrive', { name: d.name, i: i + 1, n: drives.length }) : t('tidy.asking');
+    TIDY = await api('/api/tidy?uuid=' + encodeURIComponent(d.uuid)).catch(() => ({})); // which way to the AI, for this drive: the confirmation names it
+    if (!TIDY.site && !TIDY.ready) {
+      toast(OV.devices.find(x => x.uuid === d.uuid)?.local === true ? t('tidy.keptToast', { pc: PC() }) : t('tidy.needKey'));
+      const adv = $('#tidybox details'); if (adv) adv.open = true; $('#tidykey')?.focus(); continue;
+    }
+    const ask = consent => post('/api/tidy/propose', { uuid: d.uuid, consent, via: TIDY.site ? 'site' : TIDY.to, lang: document.documentElement.lang });
+    try {
+      const ms = await ask(false).catch(e => {
+        if (e.message !== 'consent needed') throw e;
+        const via = TIDY.site ? t('tidy.viaSiteKey', { site: TIDY.site }) : TIDY.ai?.key ? t('tidy.viaOwnKey') : t('tidy.viaComputer');
+        return confirm(t('tidy.consent', { name: d.name, to: TIDY.to, via })) ? ask(true) : null;
+      });
+      if (ms) TPLAN[d.uuid] = { name: d.name, moves: ms };
+    } catch (e) { toast(`${d.name}: ${e.message}`); }
   }
-  const ask = consent => post('/api/tidy/propose', { uuid: b.dataset.tidy, consent, via: TIDY.site ? 'site' : TIDY.to });
-  try {
-    TPLAN = await ask(false).catch(e => {
-      if (e.message !== 'consent needed') throw e;
-      const via = TIDY.site ? t('tidy.viaSiteKey', { site: TIDY.site }) : TIDY.ai?.key ? t('tidy.viaOwnKey') : t('tidy.viaComputer');
-      if (!confirm(t('tidy.consent', { name: b.dataset.name, to: TIDY.to, via }))) return null;
-      return ask(true);
-    });
-  } catch (e) { toast(e.message); TPLAN = null; }
   b.disabled = false; b.textContent = label;
-  if (TPLAN) tidySheet(b.dataset.tidy, b.dataset.name);
+  if (Object.keys(TPLAN).length) tidySheet();
 }
-function tidySheet(uuid, name) {
-  const groups = {};
-  TPLAN.forEach((m, i) => { const k = m.to.includes('/') ? m.to.slice(0, m.to.lastIndexOf('/')) : t('tidy.top'); (groups[k] ||= []).push(i); });
-  const ok = TPLAN.filter(m => m.ok).length, sheet = $('#sheet'); sheet.className = 'sheet plan';
-  sheet.innerHTML = `<div class="plan" style="position:relative" data-tuuid="${esc(uuid)}">
-    <button class="x" aria-label="${t('close')}" data-close><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
-    <h3>${ok ? t('tidy.proposed', { n: ok, name: esc(name) }) : t('tidy.nothing', { name: esc(name) })}</h3>
+const dirOf = p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : t('tidy.top'), baseOf = p => p.slice(p.lastIndexOf('/') + 1);
+function tidySheet() {
+  const all = Object.entries(TPLAN).flatMap(([u, p]) => p.moves.map((m, i) => ({ ...m, kind: m.kind || 'other', u, i, drive: p.name })));
+  const ok = all.filter(m => m.ok), no = all.filter(m => !m.ok), many = Object.keys(TPLAN).length > 1;
+  const drives = Object.values(TPLAN).map(p => esc(p.name)).join(', ');
+  // A group per folder of arrival; folders made side by side in one place (Export/Sayf, Export/Nayt …) are one
+  // group, each file showing the folder it goes in.
+  const parents = {};
+  for (const m of ok) { const d = dirOf(m.to); (parents[m.u + '|' + m.kind + '|' + dirOf(d)] ||= new Set()).add(d); } // of one kind
+  const groups = new Map();
+  for (const m of ok) {
+    const d = dirOf(m.to), p = dirOf(d), nest = d.includes('/') && parents[m.u + '|' + m.kind + '|' + p].size > 1;
+    m.dest = nest ? p : d; m.sub = nest ? d.slice(p.length + 1) : '';
+    const k = m.u + '|' + m.kind + '|' + m.dest; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(m);
+  }
+  const most = (ms, f) => { const n = {}; ms.forEach(m => { n[f(m)] = (n[f(m)] || 0) + 1; }); return Object.keys(n).sort((a, b) => n[b] - n[a])[0]; };
+  const order = [...groups.values()].map(ms => Object.assign(ms, { kind: most(ms, m => m.kind), why: most(ms, m => m.reason) }))
+    .sort((a, b) => TIDY_KINDS.indexOf(a.kind) - TIDY_KINDS.indexOf(b.kind) || a[0].drive.localeCompare(b[0].drive) || a[0].dest.localeCompare(b[0].dest));
+  // A file shows where it comes from and why only where that differs from its group, or from its piece.
+  const row = (m, from, why) => `<label class="trow"><input type="checkbox" data-tu="${esc(m.u)}" data-ti="${m.i}" data-kind="${m.kind}"${m.kind === 'footage' ? '' : ' checked'}>
+    <span><b>${esc(baseOf(m.from))}</b>${dirOf(m.from) !== from ? `<em>${t('tidy.from', { folder: esc(dirOf(m.from)) })}</em>` : ''}${m.reason !== why ? `<em>${esc(m.reason)}</em>` : ''}</span></label>`;
+  const group = ms => {
+    const from = most(ms, m => dirOf(m.from)), pieces = new Map();
+    ms.forEach(m => { if (!pieces.has(m.sub)) pieces.set(m.sub, []); pieces.get(m.sub).push(m); });
+    const nested = ms[0].sub !== '', why = nested ? '' : ms.why;
+    return `<details class="tgroup" data-kind="${ms.kind}"><summary><input type="checkbox" data-tgroup aria-label="${t('tidy.group')}">
+      <span class="tdest"><b>${esc(ms[0].dest)}</b>${many ? `<em>${esc(ms[0].drive)}</em>` : ''}</span><span class="tcount">${t('tidy.files', { n: ms.length })}</span><span class="tkind">${KIND_NAME[ms.kind]}</span>
+      <span class="twhy">${t('tidy.from', { folder: esc(from) })}${why ? `. ${esc(why)}` : ''}</span>${ms.kind === 'footage' ? `<span class="twarn">${t('tidy.relink')}</span>` : ''}</summary>
+      <div class="trows">${[...pieces].map(([sub, ps]) => { const pwhy = most(ps, m => m.reason);
+        return (nested ? `<div class="tpiece"><b>${esc(sub)}/</b><em>${t('tidy.files', { n: ps.length })}. ${esc(pwhy)}</em></div>` : '') + ps.map(m => row(m, from, nested ? pwhy : why)).join(''); }).join('')}</div></details>`;
+  };
+  const kinds = TIDY_KINDS.filter(k => ok.some(m => m.kind === k)), sheet = $('#sheet'); sheet.className = 'sheet plan';
+  sheet.innerHTML = `<div class="plan" style="position:relative">${X_BUTTON}
+    <h3>${ok.length ? t('tidy.proposedOn', { n: ok.length, drives }) : t('tidy.nothingOn', { drives })}</h3>
     <p class="sub">${TIDY.to ? t('tidy.sheetSubTo', { to: esc(TIDY.to) }) : t('tidy.sheetSub')}</p>
-    ${Object.entries(groups).map(([to, ix]) => `<div class="card"><h4>${t('tidy.into', { folder: esc(to) })}</h4>${ix.map(i => { const m = TPLAN[i];
-      return `<label class="mv" style="grid-template-columns:24px minmax(0,1fr)"><input type="checkbox" data-ti="${i}"${m.ok ? '' : ' disabled'}>
-        <div><b>${esc(m.from)}</b> → <b>${esc(m.to)}</b><span>${esc(m.reason)}</span>${m.ok ? '' : `<span><em>${esc(I18N.from(m.why))}</em></span>`}</div></label>`; }).join('')}</div>`).join('')}
-    ${ok ? `<div class="go"><button class="act primary" data-tidyapply>${t('tidy.apply')}</button><button class="act" data-close>${t('cancel')}</button></div>` : ''}
+    ${ok.length ? `<div class="tbulk"><span>${t('tidy.approve')}</span>${kinds.map(k => `<button class="chip" data-tkind="${k}" aria-pressed="false">${KIND_NAME[k]} <span class="n">${ok.filter(m => m.kind === k).length}</span></button>`).join('')}
+      <button class="chip sep" data-tsel="1">${t('tidy.selAll')}</button><button class="chip" data-tsel="0">${t('tidy.selNone')}</button></div>` : ''}
+    ${order.map(group).join('')}
+    ${no.length ? `<details class="card"><summary>${t('tidy.refused', { n: no.length })}</summary>${no.map(m => `<div class="trow"><span></span><span><b>${esc(m.from)}</b> → ${esc(m.to)}<em>${esc(I18N.from(m.why))}</em></span></div>`).join('')}</details>` : ''}
+    ${ok.length ? `<div class="go tgo"><button class="act primary" data-tidyapply></button><button class="act" data-close>${t('cancel')}</button></div>` : ''}
   </div>`;
+  tidySync();
   $('#veil').classList.add('open'); $('#veil').setAttribute('aria-hidden', 'false');
 }
+// tidySync: each group's box and each kind's chip follow the moves ticked, and the button counts them.
+function tidySync() {
+  const boxes = $$('#sheet [data-ti]');
+  $$('#sheet .tgroup').forEach(g => { const xs = $$('[data-ti]', g), n = xs.filter(x => x.checked).length, gb = $('[data-tgroup]', g);
+    gb.checked = n === xs.length; gb.indeterminate = n > 0 && n < xs.length; });
+  $$('#sheet [data-tkind]').forEach(c => c.setAttribute('aria-pressed', boxes.filter(x => x.dataset.kind === c.dataset.tkind).every(x => x.checked)));
+  const n = boxes.filter(x => x.checked).length, go = $('#sheet [data-tidyapply]');
+  if (go) { go.textContent = t('tidy.applyN', { n }); go.disabled = !n; }
+}
+$('#sheet').addEventListener('click', e => {
+  const set = (xs, on) => { xs.forEach(x => { x.checked = on; }); tidySync(); };
+  const gb = e.target.closest('[data-tgroup]');
+  if (gb) { e.preventDefault(); const xs = $$('[data-ti]', gb.closest('.tgroup')); return set(xs, !xs.every(x => x.checked)); } // the box, not the group's opening
+  const k = e.target.closest('[data-tkind]');
+  if (k) { const xs = $$('#sheet [data-ti]').filter(x => x.dataset.kind === k.dataset.tkind); return set(xs, !xs.every(x => x.checked)); }
+  const s = e.target.closest('[data-tsel]'); if (s) return set($$('#sheet [data-ti]'), s.dataset.tsel === '1');
+});
+$('#sheet').addEventListener('change', e => { if (e.target.matches('[data-ti]')) tidySync(); });
 async function tidyApply(btn) {
-  const p = btn.closest('[data-tuuid]'), moves = $$('[data-ti]:checked', p).map(x => +x.dataset.ti);
+  const by = {}; $$('#sheet [data-ti]:checked').forEach(x => (by[x.dataset.tu] ||= []).push(+x.dataset.ti));
   btn.disabled = true; btn.textContent = t('moving');
-  let r; try { r = await post('/api/tidy/apply', { uuid: p.dataset.tuuid, moves }); } catch (e) { btn.textContent = e.message; return; }
-  btn.parentElement.innerHTML = `<p style="margin:0"><b>${t('tidy.moved', { n: num(r.moved) })}</b> ${r.skipped ? t('tidy.skipped', { n: num(r.skipped) }) : ''}${r.error ? esc(I18N.from(r.error)) + '. ' : ''}${t('tidy.rescan')}</p><button class="act" data-close>${t('close')}</button>`;
+  let moved = 0, skipped = 0; const errs = [];
+  for (const [uuid, moves] of Object.entries(by)) { // one drive after the other: each has its own plan and undo
+    try { const r = await post('/api/tidy/apply', { uuid, moves }); moved += num(r.moved); skipped += num(r.skipped); if (r.error) errs.push(`${TPLAN[uuid].name}: ${I18N.from(r.error)}`); }
+    catch (e) { errs.push(`${TPLAN[uuid].name}: ${e.message}`); }
+  }
+  btn.parentElement.innerHTML = `<p style="margin:0"><b>${t('tidy.moved', { n: moved })}</b> ${skipped ? t('tidy.skipped', { n: skipped }) : ''}${errs.map(x => esc(x) + '. ').join('')}${t('tidy.rescan')}</p><button class="act" data-close>${t('close')}</button>`;
   tidyBox();
 }
 
@@ -1501,9 +1588,10 @@ $('#view').addEventListener('click', async e => {
     try { await post('/api/tidy/ai', clear ? {} : { provider: $('#tidyprov').value, model: $('#tidymodel').value, url: $('#tidyurlrow').hidden ? '' : $('#tidyurl').value, key: $('#tidykey').value }); } catch (err) { toast(err.message); return; }
     toast(clear ? t('tidy.removed') : t('tidy.saved')); return tidyBox();
   }
-  if (e.target.closest('[data-tidyundo]')) {
+  const tu = e.target.closest('[data-tidyundo]');
+  if (tu) {
     if (!confirm(t('tidy.undoConfirm'))) return;
-    try { const r = await post('/api/tidy/undo'); toast(r.error ? I18N.from(r.error) : t('tidy.putBack', { n: num(r.moved) })); } catch (err) { toast(err.message); } return tidyBox();
+    try { const r = await post('/api/tidy/undo', { uuid: tu.dataset.tidyundo }); toast(r.error ? I18N.from(r.error) : t('tidy.putBack', { n: num(r.moved) })); } catch (err) { toast(err.message); } return tidyBox();
   }
   const wh = e.target.closest('[data-where]');
   if (wh) {

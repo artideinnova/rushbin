@@ -76,7 +76,7 @@ func TestTidyApplyUndo(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m, "P/2026/CamA/C0001.MP4")); err != nil {
 		t.Fatal("not moved:", err)
 	}
-	u, ok := readUndo(dir)
+	u, ok := readUndo(dir, "D")
 	if !ok || u.UUID != "D" || len(u.Made) != 2 {
 		t.Fatalf("undo log = %+v", u)
 	}
@@ -91,7 +91,7 @@ func TestTidyApplyUndo(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(m, "P")); err == nil {
 		t.Fatal("folders made by the tidy are still there")
 	}
-	if _, ok := readUndo(dir); ok {
+	if _, ok := readUndo(dir, "D"); ok {
 		t.Fatal("undo log still there")
 	}
 }
@@ -214,7 +214,7 @@ func TestTidyFlow(t *testing.T) {
 	if code := post("/api/tidy/apply", `{"uuid":"D","moves":[0]}`, nil); code != 409 {
 		t.Fatalf("applying the same plan twice: %d, want 409", code)
 	}
-	if code := post("/api/tidy/undo", `{}`, &res); code != 200 || res.Moved != 1 {
+	if code := post("/api/tidy/undo", `{"uuid":"D"}`, &res); code != 200 || res.Moved != 1 {
 		t.Fatalf("undo: %d %+v", code, res)
 	}
 	if _, err := os.Stat(filepath.Join(m, "A/C0002.MP4")); err != nil {
