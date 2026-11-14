@@ -230,6 +230,14 @@
   .dupe ul { list-style: none; margin: 4px 0 0; padding: 0; color: var(--ink-2); font-size: 12.5px; }
   .dupe li { overflow-wrap: anywhere; }
   .dupe li strong { color: var(--ink); font-weight: 600; margin-right: 6px; }
+  .disks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .ondisk { display: inline-block; padding: 2px 9px; border-radius: 999px; background: var(--fill); color: var(--ink); font-size: 12px; }
+  .ondisk i { font-style: normal; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .dupe .bk { font-style: normal; margin-left: 8px; color: var(--accent); font-size: 12px; }
+  .backups { padding: 16px 18px; border-radius: 20px; margin: 0 0 18px; }
+  .backups h3 { margin: 0; font-size: 15px; } .backups p { margin: 4px 0 10px; color: var(--ink-2); font-size: 13px; }
+  .backups dl { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px 14px; align-items: center; margin: 0; }
+  .backups dt { overflow-wrap: anywhere; color: var(--ink); } .backups dd { margin: 0; color: var(--ink-3); font-variant-numeric: tabular-nums; }
   .save { text-align: right; padding-right: 8px; font-variant-numeric: tabular-nums; }
   .save strong { display: block; font: 700 22px/1 -apple-system, "SF Pro Display", sans-serif; color: var(--teal); }
   .save span { color: var(--ink-3); font-size: 12px; }
@@ -305,6 +313,7 @@
   .tray { position: fixed; right: 24px; bottom: 24px; z-index: 20; display: none; align-items: center; gap: 12px; padding: 8px 8px 8px 18px; border-radius: 999px; box-shadow: 0 18px 50px rgba(0,0,0,.5), inset 0 1px 0 var(--glass-hi); }
   .tray.show { display: flex; }
   .tray b { font-variant-numeric: tabular-nums; }
+  .tray .x { position: static; flex: none; }
   .sheet.plan { display: block; width: min(760px, 100%); overflow-y: auto; padding: 28px; }
   .plan h3 { margin: 0 0 6px; font: 700 26px/1.15 -apple-system, "SF Pro Display", sans-serif; letter-spacing: -.02em; padding-right: 36px; }
   .plan .sub { color: var(--ink-2); margin: 0 0 20px; }
@@ -470,7 +479,7 @@
 
 <div class="veil" id="veil" aria-hidden="true"><div class="sheet" role="dialog" aria-modal="true" data-i18n-aria-label="sheet.clip" id="sheet"></div></div>
 <div class="toast glass" id="toast" role="status"></div>
-<div class="tray glass" id="tray" role="status"><span id="traytext"></span><button class="act primary" data-plan data-i18n="tray.review"></button></div>
+<div class="tray glass" id="tray" role="status"><span id="traytext"></span><button class="act primary" data-plan data-i18n="tray.review"></button><button class="x" data-trayclose data-i18n-aria-label="close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button></div>
 <div class="banner glass" id="banner" role="status"></div>
 
 <script>
@@ -656,11 +665,15 @@ const searching = () => !!(S.q || S.tokens.length);
 const CHEV = '<span class="chev"><svg width="8" height="12" viewBox="0 0 8 12"><path d="M2 1.5L6.5 6 2 10.5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
 const secsOf = idx => idx.reduce((a, i) => a + num(ROWS[i].dur), 0);
 const coversOf = (idx, k) => [...idx].sort((a, b) => num(ROWS[b].dur) - num(ROWS[a].dur)).slice(0, k).map(i => `<img loading="lazy" src="${thumb(ROWS[i].thumb)}" alt="">`).join('');
+// Where a project is: each drive it is on, biggest first, with what it takes there.
+const projDisks = proj => { const d = OV?.projects?.find(p => p.project === proj)?.disks || {};
+  const e = Object.entries(d).sort((a, b) => b[1] - a[1]);
+  return e.length ? `<span class="disks">${e.map(([n, b]) => `<span class="ondisk">${esc(n)} <i>${bytes(b)}</i></span>`).join('')}</span>` : ''; };
 function section(proj, idx) {
   const open = !proj || !!S.q || OPEN.has(proj);
   if (!proj) return `<section class="section">${grid('', '', idx)}</section>`;
   const head = `<button class="sec-head" data-toggle="${esc(proj)}" aria-expanded="${open}">${CHEV}
-    <span><h2>${esc(proj)}</h2><p>${t('sec.time', { time: human(secsOf(idx)), clips: clips(idx.length) })}</p></span></button>`;
+    <span><h2>${esc(proj)}</h2><p>${t('sec.time', { time: human(secsOf(idx)), clips: clips(idx.length) })}${projDisks(proj)}</p></span></button>`;
   if (!open) return `<section class="section closed" data-proj="${esc(proj)}"><header>${head}
       <div class="covers" data-toggle="${esc(proj)}">${coversOf(idx, 6)}</div></header></section>`;
   return `<section class="section" data-proj="${esc(proj)}"><header>${head}</header>${folders(proj, idx)}</section>`;
@@ -912,7 +925,9 @@ async function refreshTray() {
   try { PLAN = await api('/api/plan'); } catch { return; }
   const ok = PLAN.filter(m => m.ok), wait = PLAN.filter(unverified), tr = $('#tray'), sum = a => bytes(a.reduce((x, m) => x + num(m.size), 0));
   $('#traytext').innerHTML = ok.length ? t('tray.text', { n: ok.length, size: sum(ok) }) : t('tray.verify', { n: wait.length, size: sum(wait) });
-  tr.classList.toggle('show', ok.length + wait.length > 0 && !$('#veil').classList.contains('open'));
+  tr.dataset.sig = $('#traytext').textContent; // closed, it stays closed until what it says changes; Duplicates keeps a way to Review
+  let closed; try { closed = localStorage.getItem('rushbin.trayClosed'); } catch {}
+  tr.classList.toggle('show', ok.length + wait.length > 0 && !$('#veil').classList.contains('open') && closed !== tr.dataset.sig);
 }
 function mvRow(m) {
   return `<div class="mv"><img loading="lazy" src="${thumb(thumbOf(m.content))}" alt=""><div><b>${esc(m.name)}</b>
@@ -1002,38 +1017,61 @@ function moveSel(dx, dy) {
 }
 
 /* ---------- Duplicates ---------- */
-let DUPS = [];
+let DUPS = [], BACKUPS = {};
+const projOf = key => key.split('|')[1]?.split('/')[0] || '';
+// The copy kept as a backup when its project asks for one: the first on another drive (backupOf in app.go).
+function backupOf(x) {
+  const keep = x.copy || locKey(x.locations[0]), dev = keep.split('|')[0];
+  if (!BACKUPS[projOf(keep)]) return '';
+  const l = x.locations.find(l => l.device !== dev); return l ? locKey(l) : '';
+}
+const freed = x => num(x.bytes_extra) - (backupOf(x) ? num(x.size) : 0);
+// Projects whose duplicates sit on more than one drive: for each, the switch that keeps a backup there.
+function backupsCard(g) {
+  const p = {};
+  for (const x of g) { if (x.conflict) continue; const keep = x.copy || locKey(x.locations[0]), dev = keep.split('|')[0];
+    if (x.locations.some(l => l.device !== dev)) p[projOf(keep)] = (p[projOf(keep)] || 0) + num(x.size); }
+  const ps = Object.entries(p).sort((a, b) => b[1] - a[1]);
+  if (!ps.length) return '';
+  return `<div class="backups glass"><h3>${t('bk.title')}</h3><p>${t('bk.sub')}</p><dl>${ps.map(([n, b]) =>
+    `<dt>${esc(n)}</dt><dd>${bytes(b)}</dd><dd><button class="switch" role="switch" aria-checked="${!!BACKUPS[n]}" aria-label="${t('bk.title')}: ${esc(n)}" data-backup="${esc(n)}"></button></dd>`).join('')}</dl></div>`;
+}
 async function renderDups() {
   const v = $('#view'); v.innerHTML = '';
-  try { DUPS = await api('/api/dups'); } catch (e) { v.innerHTML = errorBox(e.message); return; }
+  try { DUPS = await api('/api/dups'); if (!ME.site) BACKUPS = await api('/api/backups'); } catch (e) { v.innerHTML = errorBox(e.message); return; }
   const g = DUPS;
   if (!g.length) { v.innerHTML = `<div class="empty"><h2>${t('dups.none')}</h2><p>${t('dups.noneSub')}</p></div>`; return; }
-  const ver = g.filter(x => x.verified), extra = ver.reduce((a, x) => a + num(x.bytes_extra), 0), unver = g.filter(x => !x.verified && !x.conflict);
+  const ver = g.filter(x => x.verified), extra = ver.reduce((a, x) => a + freed(x), 0), unver = g.filter(x => !x.verified && !x.conflict);
   const todo = ver.filter(x => !x.copy && x.vote !== 'discard'), canCheck = unver.filter(x => x.locations.every(l => l.online)); // checkable now
   $('#stat').textContent = t('dups.stat', { n: g.length });
   if (g[0]) ambient(g[0].thumb);
   v.innerHTML = `<h2 class="lead">${t('dups.lead', { size: bytes(extra) })}</h2>
     <p class="lead-sub">${t('dups.sub')}${unver.length ? t('dups.unverified', { n: unver.length, size: bytes(unver.reduce((a, x) => a + num(x.bytes_extra), 0)) }) : ''}</p>
+    ${ME.site ? '' : backupsCard(g)}
     <div class="toolbar">${todo.length ? `<button class="pillbtn" data-confirm-all>${t('dups.confirmAll', { n: todo.length })}</button>` : ''}${
       canCheck.length ? `<button class="pillbtn" data-verify-dups>${t('dups.verify', { n: canCheck.length })}</button>` : ''}<button class="pillbtn" data-plan>${t('dups.review')}</button></div>
     <div class="dups">${g.map((x, i) => dupRow(x, i)).join('')}</div>`;
 }
 function dupRow(x, i) {
-  const keep = x.copy || locKey(x.locations[0]);
+  const keep = x.copy || locKey(x.locations[0]), bk = backupOf(x);
   const state = x.conflict ? t('dup.conflict')
     : x.vote === 'discard' ? t('dup.discarded')
     : !x.verified ? t('dup.unverified')
     : x.copy ? (x.copy_by ? t('dup.confirmedBy', { name: esc(x.copy_by) }) : t('dup.confirmed')) : t('dup.suggested');
   return `<div class="dupe glass" data-d="${i}"><img loading="lazy" src="${thumb(x.thumb)}" alt="">
     <div><b>${esc(x.name)}</b>${x.made ? `<span class="made">${esc(madeText(x.made))}</span>` : ''}<ul role="radiogroup" aria-label="${t('dup.pick')}">${x.locations.map(l => { const on = locKey(l) === keep;
-      return `<li><button role="radio" data-pick="${esc(locKey(l))}" aria-checked="${on && !!x.copy}"${on && !x.copy ? ' class="prop"' : ''}${x.conflict ? ' disabled' : ''}><span class="r"></span><span><strong>${esc(l.disk)}</strong> ${esc(l.id)}</span></button></li>`; }).join('')}</ul>
+      return `<li><button role="radio" data-pick="${esc(locKey(l))}" aria-checked="${on && !!x.copy}"${on && !x.copy ? ' class="prop"' : ''}${x.conflict ? ' disabled' : ''}><span class="r"></span><span><strong>${esc(l.disk)}</strong> ${esc(l.id)}${locKey(l) === bk ? `<em class="bk">${t('dup.backup')}</em>` : ''}</span></button></li>`; }).join('')}</ul>
       <span class="state">${state}</span></div>
-    <div class="save">${x.conflict ? '' : `<strong>${bytes(x.bytes_extra)}</strong><span>${x.verified ? t('dup.toFree') : t('dup.toVerify')}</span>`}</div></div>`;
+    <div class="save">${x.conflict ? '' : `<strong>${bytes(freed(x))}</strong><span>${x.verified ? t('dup.toFree') : t('dup.toVerify')}</span>`}</div></div>`;
 }
 $('#view').addEventListener('click', async e => {
   const p = e.target.closest('[data-pick]');
   if (p) { const row = p.closest('[data-d]'), x = DUPS[+row.dataset.d];
     await keepCopy(x.content, p.dataset.pick); x.copy = p.dataset.pick; row.outerHTML = dupRow(x, +row.dataset.d); return; }
+  const bs = e.target.closest('[data-backup]');
+  if (bs) { const on = bs.getAttribute('aria-checked') !== 'true';
+    try { BACKUPS = await post('/api/backups', { project: bs.dataset.backup, on }); } catch (err) { toast(err.message); return; }
+    renderDups(); refreshTray(); return; }
   if (e.target.closest('[data-verify-dups]')) {
     const contents = DUPS.filter(x => !x.verified && !x.conflict && x.locations.every(l => l.online)).map(x => x.content);
     return post('/api/verify', { contents }).then(() => { toast(t('toast.verify')); poll(); }, err => toast(err.message));
@@ -1468,6 +1506,7 @@ document.addEventListener('click', e => {
     more.previousElementSibling.innerHTML = idx.map(tile).join(''); more.remove(); return; }
   const el = e.target.closest('.tile'); if (el) openClip(+el.dataset.i);
   if (e.target.closest('[data-plan]')) openPlan();
+  if (e.target.closest('[data-trayclose]')) { try { localStorage.setItem('rushbin.trayClosed', $('#tray').dataset.sig); } catch {} $('#tray').classList.remove('show'); }
 });
 document.addEventListener('keydown', e => {
   const typing = document.activeElement?.tagName === 'INPUT';

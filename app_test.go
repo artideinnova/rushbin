@@ -147,6 +147,20 @@ func TestApp(t *testing.T) {
 		cmp.OnlyB.Clips != 0 || cmp.UniqueA.Clips != 1 || cmp.UniqueB.Clips != 0 {
 		t.Fatalf("after the check: dups %+v, compare A and B %+v", dups, cmp)
 	}
+	// A backup asked for the project of the copy kept (C, on B): one copy on another drive stays, the first one;
+	// the other copy on that drive still goes. Turned off, both go again.
+	if code := post("/api/backups", `{"project":"C","on":true}`, true); code != 200 {
+		t.Fatalf("backup on: %d", code)
+	}
+	get("/api/plan", &plan)
+	if slices.ContainsFunc(plan, func(m Move) bool { return relSlash(tmp, m.From) == "A/P/clip.mp4" }) || len(plan) != 2 {
+		t.Fatalf("with a backup of C: %+v", plan)
+	}
+	post("/api/backups", `{"project":"C","on":false}`, true)
+	var po Overview
+	if get("/api/overview", &po); po.Projects[slices.IndexFunc(po.Projects, func(s Stat) bool { return s.Project == "P" })].Disks["A"] == 0 {
+		t.Fatalf("project P without its drive: %+v", po.Projects)
+	}
 	get("/api/plan", &plan)
 	var from []string
 	for _, m := range plan {

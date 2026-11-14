@@ -795,6 +795,8 @@ type Stat struct {
 	N       int     `json:"n"`
 	Seconds float64 `json:"seconds"`
 	Bytes   int64   `json:"bytes,omitempty"`
+	// Disks: for a project, the bytes it takes on each drive, by the drive's name
+	Disks map[string]int64 `json:"disks,omitempty"`
 }
 
 func (c *Catalog) Overview() Overview {
@@ -818,6 +820,10 @@ func (c *Catalog) Overview() Overview {
 	}
 	for _, cl := range c.list {
 		add(proj, cl.Project, Stat{Project: cl.Project}, cl)
+		if st := proj[cl.Project]; st.Disks == nil {
+			st.Disks = map[string]int64{}
+		}
+		proj[cl.Project].Disks[c.device(cl.Device).Name] += cl.Size
 		add(cam, cl.Codec, Stat{Label: cl.Codec}, cl)
 		if f := folder(cl.ID); f != "" {
 			add(fold, cl.Project+"/"+f, Stat{Project: cl.Project, Folder: f}, cl)

@@ -197,6 +197,8 @@ func (a *App) routes() http.Handler {
 	m.HandleFunc("GET /api/clip", func(w http.ResponseWriter, r *http.Request) { serveClip(w, r, a.catalog()) })
 	m.HandleFunc("GET /api/dups", func(w http.ResponseWriter, r *http.Request) { send(w, a.catalog().Dups()) })
 	m.HandleFunc("GET /api/status", a.statusHandler)
+	m.HandleFunc("GET /api/backups", func(w http.ResponseWriter, r *http.Request) { send(w, a.backups()) })
+	m.HandleFunc("POST /api/backups", a.setBackup)
 	m.HandleFunc("GET /api/plan", func(w http.ResponseWriter, r *http.Request) { send(w, a.plan()) })
 	m.HandleFunc("GET /api/play", a.play)
 	m.HandleFunc("GET /live/{id}/{file}", a.serveLive)
@@ -436,12 +438,12 @@ type Move struct {
 }
 
 func (a *App) plan() []Move {
-	c := a.catalog()
+	c, backups := a.catalog(), a.backups()
 	ms := []Move{}
 	for _, cl := range c.list {
 		dec := c.decision(cl.Content)
 		key := cl.Device + "|" + cl.ID
-		if dec.Vote != "discard" && (dec.Copy == "" || dec.Copy == key) {
+		if dec.Vote != "discard" && (dec.Copy == "" || dec.Copy == key || key == backupOf(c, dec.Copy, backups)) {
 			continue
 		}
 		d := c.device(cl.Device)
@@ -456,6 +458,59 @@ func (a *App) plan() []Move {
 	}
 	slices.SortFunc(ms, func(x, y Move) int { return strings.Compare(x.Disk+x.From, y.Disk+y.From) })
 	return ms
+}
+
+// backupsFile lists the projects whose duplicates keep, besides the copy chosen, a backup on another drive.
+// Off by default: one copy is enough for many projects, and drives cost.
+const backupsFile = "backups.json"
+
+func (a *App) backups() map[string]bool {
+	on := map[string]bool{}
+	if j, err := os.ReadFile(filepath.Join(a.dir, backupsFile)); err == nil {
+		json.Unmarshal(j, &on)
+	}
+	return on
+}
+
+// backupOf: when the project of the copy kept asks for a backup, the copy that stays as that backup, the
+// first on another drive (shortest path first); "" otherwise. The page marks the same one (backupOf there).
+func backupOf(c *Catalog, keep string, on map[string]bool) string {
+	k := c.byKey[keep]
+	if k == nil || !on[k.Project] {
+		return ""
+	}
+	for _, l := range c.locations(k.Content) {
+		if l.Device != k.Device {
+			return l.Device + "|" + l.ID
+		}
+	}
+	return ""
+}
+
+// setBackup turns the backup of one project on or off: {"project": "...", "on": true}.
+func (a *App) setBackup(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Project string `json:"project"`
+		On      bool   `json:"on"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in) != nil || in.Project == "" {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	a.wmu.Lock()
+	defer a.wmu.Unlock()
+	on := a.backups()
+	if in.On {
+		on[in.Project] = true
+	} else {
+		delete(on, in.Project)
+	}
+	j, _ := json.Marshal(on)
+	if err := writeFile(filepath.Join(a.dir, backupsFile), j); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	send(w, on)
 }
 
 // whyUnverified: a copy waits for the check byte for byte, which the page asks for (App.verify).
