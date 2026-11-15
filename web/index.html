@@ -242,6 +242,7 @@
   .dproj { padding: 16px 18px; border-radius: 22px; margin: 0 0 14px; }
   .dhead { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
   .dhead > div { flex: 1 1 260px; } .dhead h3 { margin: 0; font-size: 19px; } .dhead p { margin: 2px 0 0; color: var(--ink-2); font-size: 13px; }
+  .keepon { display: inline-flex; flex-wrap: wrap; gap: 6px; }
   .bkline { display: inline-flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); }
   .dproj details { margin-top: 10px; } .dproj summary { cursor: pointer; color: var(--ink-2); font-size: 13px; padding: 4px 0; }
   .dproj details .dups { margin-top: 10px; }
@@ -1071,12 +1072,16 @@ const freed = x => num(x.bytes_extra) - (backupOf(x) ? num(x.size) : 0);
 // drive, one button for its suggestions; the copies themselves stay folded, opened only to check or change one.
 const DOPEN = new Set();
 function dupProject(p, idx) {
-  const xs = idx.map(i => DUPS[i]), ver = xs.filter(x => x.verified), todo = ver.filter(x => !x.copy && x.vote !== 'discard');
+  const xs = idx.map(i => DUPS[i]), ver = xs.filter(x => x.verified);
+  // One choice for the whole project: keep its copies on one drive (the drive's shortest path for each clip).
+  const drives = new Map(); for (const x of ver) for (const l of x.locations) if (!drives.has(l.device)) drives.set(l.device, l.disk);
+  const keepOn = dev => ver.filter(x => !x.conflict && x.vote !== 'discard' && x.locations.some(l => l.device === dev));
   const cross = !ME.site && xs.some(x => !x.conflict && x.locations.some(l => l.device !== keepOf(x).device));
   return `<section class="dproj glass" data-dp="${esc(p)}"><div class="dhead"><div><h3>${esc(p || t('dups.noProject'))}</h3>
       <p>${t('dups.projSub', { n: xs.length, size: bytes(ver.reduce((a, x) => a + freed(x), 0)) })}</p></div>
     ${cross ? `<span class="bkline"><button class="switch" role="switch" aria-checked="${!!BACKUPS[p]}" aria-label="${t('bk.title')}: ${esc(p)}" data-backup="${esc(p)}"></button>${t('bk.title')}</span>` : ''}
-    ${todo.length ? `<button class="pillbtn" data-confirm-proj="${esc(p)}">${t('dups.confirmAll', { n: todo.length })}</button>` : ''}</div>
+    ${drives.size ? `<span class="keepon">${[...drives].map(([dev, disk]) => { const ks = keepOn(dev), all = ks.every(x => x.copy?.startsWith(dev + '|'));
+      return `<button class="chip" data-keepon="${esc(dev)}" data-disk="${esc(disk)}" data-proj="${esc(p)}" aria-pressed="${all}">${t('dups.keepOn', { drive: esc(disk), n: ks.length })}</button>`; }).join('')}</span>` : ''}</div>
     <details${DOPEN.has(p) ? ' open' : ''}><summary>${t('dups.show', { n: xs.length })}</summary><div class="dups">${idx.map(i => dupRow(DUPS[i], i)).join('')}</div></details></section>`;
 }
 async function renderDups() {
@@ -1120,10 +1125,15 @@ $('#view').addEventListener('click', async e => {
     const contents = DUPS.filter(x => !x.verified && !x.conflict && x.locations.every(l => l.online)).map(x => x.content);
     return post('/api/verify', { contents }).then(() => { toast(t('toast.verify')); poll(); }, err => toast(err.message));
   }
-  const all = e.target.closest('[data-confirm-proj]');
-  if (all) { all.disabled = true; const todo = DUPS.filter(x => x.verified && !x.copy && x.vote !== 'discard' && (keepOf(x).project || '') === all.dataset.confirmProj);
-    for (const x of todo) await post('/api/decide', { content: x.content, kind: 'copy', value: locKey(x.locations[0]) }).catch(() => {});
-    toast(t('dups.confirmed', { n: todo.length })); renderDups(); refreshTray(); }
+  const ko = e.target.closest('[data-keepon]');
+  if (ko) { const dev = ko.dataset.keepon, proj = ko.dataset.proj; ko.closest('.keepon').querySelectorAll('button').forEach(b => { b.disabled = true; });
+    const todo = DUPS.filter(x => x.verified && !x.conflict && x.vote !== 'discard' && (keepOf(x).project || '') === proj && x.locations.some(l => l.device === dev))
+      .map(x => [x, locKey(x.locations.find(l => l.device === dev))]).filter(([x, k]) => x.copy !== k); // locations: shortest path first
+    let done = 0, failed = 0;
+    const next = async () => { for (let it; (it = todo.shift());) { try { await post('/api/decide', { content: it[0].content, kind: 'copy', value: it[1] }); done++; } catch { failed++; } ko.textContent = `${done + failed}…`; } };
+    await Promise.all(Array.from({ length: 6 }, next)); // six at a time: in a team each goes to the site
+    toast(failed ? t('dups.keepFailed', { n: failed }) : t('dups.kept', { n: done, drive: ko.dataset.disk }));
+    renderDups(); refreshTray(); }
 });
 
 /* ---------- Drives ---------- */
