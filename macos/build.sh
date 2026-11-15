@@ -40,6 +40,7 @@ lipo -create $OUT/shell-arm64 $OUT/shell-x86_64 -output $APP/Contents/MacOS/rush
 lipo -create $OUT/vision-arm64 $OUT/vision-x86_64 -output $APP/Contents/MacOS/rushbin-vision
 rm -f $OUT/engine-* $OUT/shell-* $OUT/vision-*
 sed "s/__VERSION__/$VERSION/g" macos/Info.plist > $APP/Contents/Info.plist
+plutil -lint -s $APP/Contents/Info.plist # an unreadable plist loses the app's identity: no valid signature
 cp macos/AppIcon.icns $APP/Contents/Resources/
 cp -R macos/*.lproj $APP/Contents/Resources/ # the shell's words and the permission prompts, per language
 cp LICENSE.md NOTICE.md $APP/Contents/Resources/

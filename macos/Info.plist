@@ -56,7 +56,7 @@
 	<string>rushbin reads your external drives to catalog the footage on them. It never writes to them unless you move files to its trash.</string>
 	<key>NSNetworkVolumesUsageDescription</key>
 	<string>rushbin reads network drives to catalog the footage on them. It never writes to them unless you move files to its trash.</string>
-	<!-- Sparkle: the public half of the EdDSA key in the releasing Mac's Keychain ; checks
+	<!-- Sparkle: the public half of the EdDSA key in the Keychain of the Mac that publishes the releases; checks
 	     every 6 hours from the feed the engine gives (macos/main.swift), downloads and installs on quit. -->
 	<key>SUPublicEDKey</key>
 	<string>F6uQHsWE96/Pa+fSpUx0qi8MIuyAcbhHHhJesmxel7g=</string>
