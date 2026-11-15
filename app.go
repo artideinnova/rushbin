@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -60,8 +61,10 @@ type App struct {
 	verifyFor  map[string]bool // what it asked for: contents, and "" for the copies the trash waits for
 	busy       map[string]int  // mount path → reads of that drive going on now (App.reading)
 	queued     map[string]bool // mount path → a scan of it waits in queue
-	copying    bool            // a project is being copied to one drive (consolidate.go)
+	copyTo     string          // the drive a project is being copied to (consolidate.go), "" when none
 	copyNote   string          // how that copy goes, or how the last one went
+	copyDone   atomic.Int64    // bytes of that copy done, of copyTotal (0 when none runs): not guarded by smu
+	copyTotal  atomic.Int64
 
 	wmu    sync.Mutex // serializes decision writes and trash moves
 	lastID int64      // the team's last decision this Mac has (guarded by wmu)
@@ -705,7 +708,7 @@ func (a *App) statusHandler(w http.ResponseWriter, r *http.Request) {
 	paused, need, content := a.pause(false), a.modelsNeeded(), a.catalog().contentDone(filepath.Join(a.dir, "thumbs"))
 	a.smu.Lock()
 	defer a.smu.Unlock()
-	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev, "busy": slices.Collect(maps.Keys(a.busy)), "copy": a.copyNote,
+	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev, "busy": slices.Collect(maps.Keys(a.busy)), "copy": a.copyNote, "copy_done": a.copyDone.Load(), "copy_total": a.copyTotal.Load(),
 		"background": a.background, "unreadable": append([]Pending{}, a.unreadable...), "paused": paused, "content": content,
 		"models": map[string]any{"need": need, "done": a.dlDone, "error": a.dlErr}})
 }
@@ -966,6 +969,9 @@ func (a *App) changed(path string) {
 			if noise[part] {
 				return
 			}
+		}
+		if mount == a.copyTo { // the copy writing there: it asks for one reading at its end, not one per file
+			return
 		}
 		if fileExists(filepath.Join(a.dir, "disks", id, "files.jsonl")) {
 			a.enqueue(mount)

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,7 +52,7 @@ func TestConsolidate(t *testing.T) {
 		if _, ok := want[cp.To]; !ok || filepath.Dir(cp.From) == filepath.Dir(cp.To) {
 			t.Fatalf("copy %+v goes to the wrong place", cp)
 		}
-		err := copyChecked(cp.From, cp.To, mtime)
+		err := copyChecked(cp.From, cp.To, mtime, io.Discard)
 		if filepath.Base(cp.To) == "c.mov" {
 			if !errors.Is(err, errExists) {
 				t.Fatalf("over another file by the same name: %v", err)
@@ -73,5 +74,25 @@ func TestConsolidate(t *testing.T) {
 	}
 	if _, _, err := consolidation(c, "Sanremo2026", "C"); err == nil {
 		t.Fatal("copying to a drive not connected")
+	}
+}
+
+// TestCopyNoRescan: while a project is copied to a drive, its own writes do not ask to read the drive again (one
+// reading per file written); a change on another drive still does, and so does one there once the copy ends.
+func TestCopyNoRescan(t *testing.T) {
+	dir, a, b := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, id := range []string{"A", "B"} {
+		must(t, os.MkdirAll(filepath.Join(dir, "disks", id), 0o755))
+		must(t, os.WriteFile(filepath.Join(dir, "disks", id, "files.jsonl"), nil, 0o644))
+	}
+	app := &App{dir: dir, seen: map[string]string{a: "A", b: "B"}, queue: make(chan string, 8), copyTo: a}
+	app.changed(filepath.Join(a, "P", "clip.mxf"))
+	app.changed(filepath.Join(b, "Q", "clip.mov"))
+	if app.queued[a] || !app.queued[b] {
+		t.Fatalf("queued during the copy to A: %v", app.queued)
+	}
+	app.copyTo = ""
+	if app.changed(filepath.Join(a, "P", "clip.mxf")); !app.queued[a] {
+		t.Fatal("a change on A after the copy is not read")
 	}
 }

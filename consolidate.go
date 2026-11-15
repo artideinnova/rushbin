@@ -98,10 +98,11 @@ func consolidation(c *Catalog, project, to string) (todo []consCopy, offline int
 var errExists = errors.New("Something is already there")
 
 // copyChecked copies from to to through a hidden file next to it, then reads the copy back: it takes its name only
-// when it holds the same bytes. The original's time is kept, as Finder does. Something already at to stays.
+// when it holds the same bytes. The original's time is kept, as Finder does. Something already at to stays. Each
+// byte written also goes to progress.
 // ponytail: the read back may come from the system's cache; Duplicati's check byte for byte reads both again before
 // any original goes to the trash.
-func copyChecked(from, to string, mtime time.Time) error {
+func copyChecked(from, to string, mtime time.Time, progress io.Writer) error {
 	if _, err := os.Lstat(to); err == nil {
 		return errExists
 	}
@@ -119,7 +120,7 @@ func copyChecked(from, to string, mtime time.Time) error {
 	}
 	defer os.Remove(tmp.Name())
 	h := sha256.New()
-	_, err = io.Copy(tmp, io.TeeReader(in, h))
+	_, err = io.Copy(io.MultiWriter(tmp, progress), io.TeeReader(in, h))
 	if err == nil {
 		err = tmp.Sync()
 	}
@@ -168,8 +169,10 @@ func (a *App) consolidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.smu.Lock()
-	busy := a.copying
-	a.copying = !busy && len(todo) > 0
+	busy := a.copyTo != ""
+	if !busy && len(todo) > 0 {
+		a.copyTo = dst.Mount
+	}
 	a.smu.Unlock()
 	if busy {
 		http.Error(w, "A project is already being copied", 409)
@@ -189,13 +192,22 @@ func (a *App) runConsolidation(project, drive, mount string, todo []consCopy) {
 		a.copyNote = s
 		a.smu.Unlock()
 	}
+	var total, base int64 // the page estimates the time left from the bytes (one file can be 2 GB, the next 2 KB)
+	for _, c := range todo {
+		total += c.Size
+	}
+	a.copyDone.Store(0)
+	a.copyTotal.Store(total)
+	defer a.copyTotal.Store(0)
 	copied, failed, why := 0, 0, ""
 	for i, c := range todo {
-		say(fmt.Sprintf("Copying %s to %s: %d of %d", project, drive, i+1, len(todo)))
+		say(fmt.Sprintf("Copying %s to %s: %d of %d files", project, drive, i+1, len(todo)))
 		t, _ := time.Parse(time.RFC3339, c.Mtime)
 		stop := a.reading(c.From)
-		err := copyChecked(c.From, c.To, t)
+		err := copyChecked(c.From, c.To, t, counter{&a.copyDone})
 		stop()
+		base += c.Size
+		a.copyDone.Store(base) // a file skipped or cut short counts as done: what is left is what the estimate needs
 		if err != nil {
 			failed++
 			why = err.Error()
@@ -213,7 +225,7 @@ func (a *App) runConsolidation(project, drive, mount string, todo []consCopy) {
 		say(fmt.Sprintf("%s copied to %s: %d files", project, drive, copied))
 	}
 	a.smu.Lock()
-	a.copying = false
-	a.enqueue(mount)
+	a.copyTo = ""
+	a.enqueue(mount) // once, now: during the copy its own writes did not ask for it (App.changed)
 	a.smu.Unlock()
 }

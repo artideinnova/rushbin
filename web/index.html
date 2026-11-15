@@ -514,6 +514,17 @@ function human(sec) {
   const h = Math.floor(sec / 3600), m = Math.round(sec % 3600 / 60);
   return h ? t('time.hm', { h, m }) : t('time.m', { m });
 }
+// eta: the time left of a long job, from its pace since this page first saw it (key names the job; done and total in
+// any unit, bytes for a copy). Nothing in the first 20 s, nor before it moves: too early to say.
+const ETA = {};
+function eta(key, done, total) {
+  done = num(done); total = num(total);
+  if (!total || done >= total) { delete ETA[key]; return ''; }
+  const now = Date.now(), s = ETA[key] ||= [now, done];
+  if (done < s[1]) { ETA[key] = [now, done]; return ''; } // started again
+  const secs = (now - s[0]) / 1000, rate = (done - s[1]) / secs;
+  return secs < 20 || rate <= 0 ? '' : t('eta', { time: human((total - done) / rate) });
+}
 // Sizes in decimal units, named the language's way (Go, To in French).
 function bytes(b) {
   b = num(b);
@@ -1675,9 +1686,11 @@ async function poll() {
   const cannot = (st.unreadable || []).map(d => t(ME.windows ? 'unreadable.fromMac' : 'unreadable.fromPC', { name: d.name, pc: PC(), fs: d.fs || '' }));
   const m = st.models || {}, dl = !num(m.need) || !OV?.devices.some(d => d.content === true) ? ''
     : m.error ? t('models.failedNote', { why: modelsFailed(m) }) : m.done ? t('models.downloading', { done: bytes(m.done), size: bytes(m.need) }) : '';
-  $('#bgnote').textContent = st.status ? '' : [...cannot, dl, I18N.from(st.background), I18N.from(st.copy)].filter(Boolean).join(' ');
+  $('#bgnote').textContent = st.status ? '' : [...cannot, dl, I18N.from(st.background),
+    [I18N.from(st.copy), num(st.copy_total) ? t('copy.bytes', { done: bytes(st.copy_done), total: bytes(st.copy_total) }) : '', eta('copy', st.copy_done, st.copy_total)].filter(Boolean).join(', ')].filter(Boolean).join(' ');
   $$('[data-opt="content"]').forEach(o => { const d = OV.devices.find(x => x.uuid === o.dataset.uuid); if (d) o.nextElementSibling.textContent = contentText(d); });
-  if (st.status) $('#stat').innerHTML = `<span class="scanbar">${esc(I18N.from(st.status))}${pct !== null && st.step === 2 ? `, ${pct}%` : ''}</span>`;
+  const left = eta(`step${st.step}/${num(st.total)}`, st.done, st.total); // previews, analysis: they have a total
+  if (st.status) $('#stat').innerHTML = `<span class="scanbar">${esc(I18N.from(st.status))}${pct !== null && st.step === 2 ? `, ${pct}%` : ''}${left ? `, ${left}` : ''}</span>`;
   if (st.status && !OV?.devices.length) catalogProgress(st, pct);
   if (STATUS && !st.status) refresh();
   if (st.version !== undefined && st.version !== VERSION) refresh(); // the catalog changed: drives connected or scanned, the team site got new data
