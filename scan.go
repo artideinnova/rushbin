@@ -174,6 +174,11 @@ func checkDuplicates(catalog, id, name string) error {
 
 // writeFile replaces path with data whole, through a file renamed over it: a reader at the same moment (the app
 // reloads the catalog while a scan starts) sees the old file or the new one, never an empty one.
+// catalogFiles: the catalog's files are replaced (written aside, then renamed over) while pages reload them. On
+// Windows a file that a reader has open cannot be replaced (Go opens files without FILE_SHARE_DELETE,
+// syscall/syscall_windows.go), and a reader may find it missing mid-rename: replacing and reading take turns.
+var catalogFiles sync.RWMutex
+
 func writeFile(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
 	if err != nil {
@@ -190,6 +195,8 @@ func writeFile(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
+	catalogFiles.Lock()
+	defer catalogFiles.Unlock()
 	return os.Rename(tmp.Name(), path)
 }
 
@@ -339,6 +346,8 @@ func inventory(root, out string, excluded []string) (int, error) {
 	if err := tmp.Close(); err != nil {
 		return 0, err
 	}
+	catalogFiles.Lock()
+	defer catalogFiles.Unlock()
 	return n, os.Rename(tmp.Name(), out)
 }
 

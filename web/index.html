@@ -677,12 +677,14 @@ const searching = () => !!(S.q || S.tokens.length);
 const CHEV = '<span class="chev"><svg width="8" height="12" viewBox="0 0 8 12"><path d="M2 1.5L6.5 6 2 10.5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
 const secsOf = idx => idx.reduce((a, i) => a + num(ROWS[i].dur), 0);
 const coversOf = (idx, k) => [...idx].sort((a, b) => num(ROWS[b].dur) - num(ROWS[a].dur)).slice(0, k).map(i => `<img loading="lazy" src="${thumb(ROWS[i].thumb)}" alt="">`).join('');
-// Where a project is: each drive it is on, biggest first, with what it takes there.
+// Where a project is: each drive it is on (by UUID: two drives can share a name), biggest first, with what it takes there.
 const projDisks = proj => { const d = OV?.projects?.find(p => p.project === proj)?.disks || {};
-  return diskChips(d); };
+  return diskChips(Object.entries(d)); };
 // Inside a project: the drives a folder's clips are on (the copy shown of each).
-const rowDisks = idx => { const d = {}; for (const i of idx) d[ROWS[i].disk] = (d[ROWS[i].disk] || 0) + num(ROWS[i].size); return diskChips(d); };
-const diskChips = d => { const e = Object.entries(d).sort((a, b) => b[1] - a[1]);
+const rowDisks = idx => { const d = {}; for (const i of idx) d[ROWS[i].device] = (d[ROWS[i].device] || 0) + num(ROWS[i].size);
+  return diskChips(Object.entries(d)); };
+const diskName = uuid => OV?.devices.find(d => d.uuid === uuid)?.name || '';
+const diskChips = byUUID => { const e = byUUID.map(([u, b]) => [diskName(u), b]).sort((a, b) => b[1] - a[1]);
   return e.length ? `<span class="disks">${e.map(([n, b]) => `<span class="ondisk">${esc(n)} <i>${bytes(b)}</i></span>`).join('')}</span>` : ''; };
 function section(proj, idx) {
   const open = !proj || !!S.q || OPEN.has(proj);
@@ -703,8 +705,8 @@ const projMove = proj => !searching() && OV?.projects?.some(p => p.project === p
 // at its last reading). Only the proposal: copying is not done here.
 function projCons(proj) {
   const p = OV?.projects?.find(x => x.project === proj), m = p?.missing; if (!m || searching()) return '';
-  const [drive, need] = Object.entries(m).sort((a, b) => a[1] - b[1] || num(p.disks[b[0]]) - num(p.disks[a[0]]))[0];
-  const free = num(OV.devices.find(d => d.name === drive)?.free);
+  const [uuid, need] = Object.entries(m).sort((a, b) => a[1] - b[1] || num(p.disks[b[0]]) - num(p.disks[a[0]]))[0];
+  const drive = diskName(uuid), free = num(OV.devices.find(d => d.uuid === uuid)?.free);
   return `<p class="cons">${!need ? t('cons.all', { drive: esc(drive) })
     : t('cons.need', { drive: esc(drive), need: bytes(need), free: bytes(free) }) + ' ' + (free >= need ? t('cons.fits') : t('cons.short', { short: bytes(need - free) }))}</p>`;
 }

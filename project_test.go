@@ -34,3 +34,19 @@ func TestSameProject(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectSameDriveNames: two drives with the same name ("Untitled", or "Windows" for two folders of one disk)
+// stay two drives in a project: what each holds and what each lacks.
+func TestProjectSameDriveNames(t *testing.T) {
+	c := &Catalog{byCont: map[string][]*Clip{}, others: map[string][]Rec{}}
+	c.Devices = []*DeviceInfo{{Device: Device{UUID: "U1", Name: "Untitled"}}, {Device: Device{UUID: "U2", Name: "Untitled"}}}
+	for _, cl := range []*Clip{{Device: "U1", ID: "P/a.mov", Project: "P", Content: "c:a", Size: 10}, {Device: "U2", ID: "P/a.mov", Project: "P", Content: "c:a", Size: 10},
+		{Device: "U2", ID: "P/b.mov", Project: "P", Content: "c:b", Size: 5}} {
+		c.list = append(c.list, cl)
+		c.byCont[cl.Content] = append(c.byCont[cl.Content], cl)
+	}
+	p := c.Overview().Projects[0]
+	if p.Disks["U1"] != 10 || p.Disks["U2"] != 15 || p.Missing["U1"] != 5 || p.Missing["U2"] != 0 {
+		t.Fatalf("project on two drives named alike: disks %v, missing %v", p.Disks, p.Missing)
+	}
+}

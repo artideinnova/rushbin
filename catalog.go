@@ -34,6 +34,7 @@ type Catalog struct {
 	byKey     map[string]*Clip   // device|id
 	byCont    map[string][]*Clip // content → every copy
 	files     map[string]Rec     // path → inventory record (size and mtime for the trash checks)
+	others    map[string][]Rec   // drive → its files that are not clips (sound, edit projects, sidecars, stills)
 	dmu       sync.RWMutex       // decisions change while pages read the catalog
 	dec       map[string]*Decision
 	looks     map[string]*Look   // thumb → what Apple Vision saw (nil: analyzed, no frames)
@@ -295,6 +296,8 @@ type drive struct {
 
 // loadCatalog reads every drive folder (device.json, files.jsonl, fullhash.tsv), decisions.jsonl and vision.jsonl.
 func loadCatalog(dir string, online map[string]bool) (*Catalog, error) {
+	catalogFiles.RLock() // files stay open until the catalog is built
+	defer catalogFiles.RUnlock()
 	devs, err := filepath.Glob(filepath.Join(dir, "disks", "*", "device.json"))
 	if err != nil {
 		return nil, err
@@ -354,7 +357,7 @@ func clipName(r Rec) string {
 }
 
 func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, looks map[string]*Look) (*Catalog, error) {
-	c := &Catalog{byKey: map[string]*Clip{}, byCont: map[string][]*Clip{}, files: map[string]Rec{}, dec: dec, looks: looks, speech: map[string]*Speech{}}
+	c := &Catalog{byKey: map[string]*Clip{}, byCont: map[string][]*Clip{}, files: map[string]Rec{}, others: map[string][]Rec{}, dec: dec, looks: looks, speech: map[string]*Speech{}}
 	// Retired drives last: their clips are not in the archive, only counted, and lost if no drive still here has them.
 	ds = slices.Clone(ds)
 	sort.SliceStable(ds, func(i, j int) bool { return ds[i].Retired == "" && ds[j].Retired != "" })
@@ -365,6 +368,9 @@ func buildCatalog(ds []drive, online map[string]bool, dec map[string]*Decision, 
 		if dr.files != nil {
 			err := recsFrom(dr.files, "files.jsonl", func(r Rec) {
 				c.files[r.Path] = r
+				if !videoExt[r.Ext] { // a clip's parts (RED's _002 …) are in its span, not here
+					c.others[d.UUID] = append(c.others[d.UUID], r)
+				}
 				if !videoExt[r.Ext] || r.Dur <= 0 {
 					return
 				}
@@ -888,7 +894,7 @@ type Stat struct {
 	N       int     `json:"n"`
 	Seconds float64 `json:"seconds"`
 	Bytes   int64   `json:"bytes,omitempty"`
-	// Disks: for a project, the bytes it takes on each drive, by the drive's name
+	// Disks: for a project, the bytes it takes on each drive, by the drive's UUID (two drives can share a name)
 	Disks map[string]int64 `json:"disks,omitempty"`
 	// Roots: for a project, the drives' top folders it is made of, as device|name
 	Roots []string `json:"roots,omitempty"`
@@ -922,7 +928,7 @@ func (c *Catalog) Overview() Overview {
 			sizes[cl.Project] = map[string]int64{}
 		}
 		sizes[cl.Project][cl.Content] = cl.Size
-		k := cl.Project + "\x00" + c.device(cl.Device).Name
+		k := cl.Project + "\x00" + cl.Device
 		if on[k] == nil {
 			on[k] = map[string]bool{}
 		}
@@ -931,7 +937,7 @@ func (c *Catalog) Overview() Overview {
 		if st := proj[cl.Project]; st.Disks == nil {
 			st.Disks = map[string]int64{}
 		}
-		proj[cl.Project].Disks[c.device(cl.Device).Name] += cl.Size
+		proj[cl.Project].Disks[cl.Device] += cl.Size
 		if r := cl.Device + "|" + part(cl.ID, 0); !slices.Contains(proj[cl.Project].Roots, r) {
 			proj[cl.Project].Roots = append(proj[cl.Project].Roots, r)
 		}
@@ -960,12 +966,9 @@ func (c *Catalog) Overview() Overview {
 		roots[cl.Device+"|"+part(cl.ID, 0)] = cl.Project
 	}
 	for _, d := range c.Devices {
-		if d.Mount == "" || d.Retired != "" {
-			continue
-		}
-		for fp, r := range c.files {
-			rel, err := filepath.Rel(d.Mount, fp)
-			if err != nil || strings.HasPrefix(rel, "..") || videoExt[r.Ext] { // clips are counted above, RED's parts in their span
+		for _, r := range c.others[d.UUID] {
+			rel, err := filepath.Rel(d.Mount, r.Path)
+			if err != nil || strings.HasPrefix(rel, "..") {
 				continue
 			}
 			rel = filepath.ToSlash(rel)
@@ -975,9 +978,8 @@ func (c *Catalog) Overview() Overview {
 			}
 			content := "n:" + path.Base(rel) + "|" + strconv.FormatInt(r.Size, 10)
 			sizes[p][content] = r.Size
-			k := p + "\x00" + d.Name
-			on[k][content] = true
-			proj[p].Disks[d.Name] += r.Size
+			on[p+"\x00"+d.UUID][content] = true
+			proj[p].Disks[d.UUID] += r.Size
 		}
 	}
 	for p, st := range proj {
