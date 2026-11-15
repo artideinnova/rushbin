@@ -218,10 +218,11 @@ func openServer(ctx context.Context, dbURL, dir string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{admin: admin, db: db, dir: dir, store: store, releases: releaseStore(store), upstream: updatesFrom(), textURL: strings.TrimRight(os.Getenv("RUSHBIN_TEXT_URL"), "/"),
+	s := &Server{admin: admin, db: db, dir: dir, store: store, releases: releaseStore(store), upstream: updatesFrom(), textURL: strings.TrimRight(os.Getenv("RUSHBIN_TEXT_URL"), "/"),
 		ai: ai, tidyCap: tidyCap, mailer: mailer,
 		proxy: os.Getenv("RUSHBIN_PROXY"), drives: make(chan struct{}, 1),
-		cats: map[int64]*Catalog{}, building: map[int64]*sync.Mutex{}, vers: map[int64]int64{}, fails: map[string][]time.Time{}}, nil
+		cats: map[int64]*Catalog{}, building: map[int64]*sync.Mutex{}, vers: map[int64]int64{}, fails: map[string][]time.Time{}}
+	return s, nil
 }
 
 // scramVerifier is what Postgres keeps of a password (SCRAM-SHA-256, RFC 5802 and 7677), made here so that the
@@ -334,8 +335,9 @@ func (s *Server) routes() http.Handler {
 	}
 	m.Handle("GET /i18n/", http.FileServerFS(web)) // public: the words of each language (web/i18n.js)
 	m.HandleFunc("GET /api/site", func(w http.ResponseWriter, r *http.Request) {
-		send(w, map[string]any{"tidy": s.ai.ready(), "ai": s.ai.To(), // tidy: the apps use the site's AI, ai: who receives a description
-			"mail": s.mailer != nil, "setup": s.setupOpen(r.Context())})
+		info := map[string]any{"tidy": s.ai.ready(), "ai": s.ai.To(), // tidy: the apps use the site's AI, ai: who receives a description
+			"mail": s.mailer != nil, "setup": s.setupOpen(r.Context())}
+		send(w, info)
 	})
 	m.HandleFunc("GET /api/version", s.serveVersion) // public: the apps ask before they update
 	m.HandleFunc("GET /health", s.health)            // public: the uptime check
@@ -436,8 +438,9 @@ func (s *Server) routes() http.Handler {
 
 // csp: only the site itself.
 func (s *Server) csp() string {
-	return "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" +
-		"; media-src 'self' https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+	script, img, connect := "'self' 'unsafe-inline'", "'self' data:", "'self'"
+	return "default-src 'self'; script-src " + script + "; style-src 'self' 'unsafe-inline'; img-src " + img +
+		"; media-src 'self' https:; connect-src " + connect + "; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 }
 
 // guard: pages and the browser API need the session cookie; writes from a browser also need the custom

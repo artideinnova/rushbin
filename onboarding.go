@@ -146,6 +146,10 @@ func newOwner(f *form) error {
 	return goodPassword(f.Password)
 }
 
+// The first team of a site comes from a setup link that whoever runs the server makes on its command line
+// (rushbin setup-link), never from the log: the link is a secret. It works once and only while the site has no
+// team; each new link replaces the last. The site keeps only its hash.
+
 // firstRun says in the log, without any secret, that the site waits for its first team.
 func (s *Server) firstRun(ctx context.Context) {
 	if s.setupOpen(ctx) {

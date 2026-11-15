@@ -156,7 +156,7 @@ func lastDecisionID(file string) int64 {
 
 // me tells the page whether it runs in the app or on the site, and the team the app is connected to.
 func (a *App) me(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"site": false, "windows": runtime.GOOS == "windows", "eula": true, "updates": a.updatesAllowed()}
+	out := map[string]any{"site": false, "windows": runtime.GOOS == "windows", "updates": a.updatesAllowed()}
 	if t := a.teamConf(); t != nil {
 		a.smu.Lock()
 		out["team"] = map[string]any{"url": t.URL, "name": t.Name, "email": t.Email, "team": t.Team, "signed_out": a.signedOut}

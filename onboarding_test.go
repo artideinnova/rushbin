@@ -6,14 +6,9 @@ import (
 	"encoding/json"
 	"io"
 	"log"
-	"mime"
-	"mime/multipart"
-	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"net/mail"
-	"net/textproto"
 	"net/url"
 	"os"
 	"regexp"
@@ -24,8 +19,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// TestOnboarding: a self-hosted site from its first run (the setup link), pairing codes for the Mac app, the
-// emails through a fake SES, sign-up with email confirmation, and what a site without RUSHBIN_LEGAL never shows.
+// sent is an email the site sent, as the fake mail server took it.
+type sent struct{ To, Subject, Text, HTML string }
+
+// TestOnboarding: a self-hosted site from its first run (the setup link), pairing codes for the Mac app, and the
+// emails through a fake mail server (fakeMailer).
 func TestOnboarding(t *testing.T) {
 	admin := os.Getenv("RUSHBIN_TEST_DB")
 	if admin == "" {
@@ -41,12 +39,6 @@ func TestOnboarding(t *testing.T) {
 	u, _ := url.Parse(admin)
 	u.Path = "/" + name
 	t.Setenv("RUSHBIN_APP_PASSWORD", token())
-	t.Setenv("RUSHBIN_SMTP_HOST", "smtp.example.com") // email with a sender that is not an address: the site does not start
-	t.Setenv("RUSHBIN_MAIL_FROM", "rushbin")
-	if _, err := openServer(ctx, u.String(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "RUSHBIN_MAIL_FROM") {
-		t.Fatalf("a sender that is not an address: %v, want an error", err)
-	}
-	t.Setenv("RUSHBIN_SMTP_HOST", "")
 	s, err := openServer(ctx, u.String(), t.TempDir())
 	must(t, err)
 	defer s.db.Close()
@@ -54,72 +46,9 @@ func TestOnboarding(t *testing.T) {
 	srv := httptest.NewServer(s.routes())
 	defer srv.Close()
 
-	// A fake SMTP server on this machine: it takes each email as the site sends it and opens it, text and HTML.
-	type sent struct{ To, Subject, Text, HTML string }
+	// The emails go to a fake mail server, which hands each one over as the site sent it.
 	mails := make(chan sent, 20)
-	smtpd, err := net.Listen("tcp", "127.0.0.1:0")
-	must(t, err)
-	defer smtpd.Close()
-	go func() {
-		for {
-			conn, err := smtpd.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer conn.Close()
-				tp := textproto.NewConn(conn)
-				tp.PrintfLine("220 fake")
-				var to string
-				for {
-					line, err := tp.ReadLine()
-					if err != nil {
-						return
-					}
-					switch cmd := strings.ToUpper(strings.SplitN(line, " ", 2)[0]); cmd {
-					case "EHLO", "HELO":
-						tp.PrintfLine("250 fake")
-					case "RCPT":
-						to = strings.Trim(strings.TrimPrefix(line, "RCPT TO:"), "<>")
-						tp.PrintfLine("250 ok")
-					case "DATA":
-						tp.PrintfLine("354 go")
-						body, _ := tp.ReadDotBytes()
-						msg, err := mail.ReadMessage(bytes.NewReader(body))
-						if err != nil {
-							t.Errorf("email: %v", err)
-							return
-						}
-						subject, _ := new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject"))
-						_, params, _ := mime.ParseMediaType(msg.Header.Get("Content-Type"))
-						m := sent{To: to, Subject: subject}
-						mr := multipart.NewReader(msg.Body, params["boundary"])
-						for {
-							p, err := mr.NextPart()
-							if err != nil {
-								break
-							}
-							b, _ := io.ReadAll(p) // the reader undoes quoted-printable
-							if strings.HasPrefix(p.Header.Get("Content-Type"), "text/html") {
-								m.HTML = string(b)
-							} else {
-								m.Text = string(b)
-							}
-						}
-						mails <- m
-						tp.PrintfLine("250 queued")
-					case "QUIT":
-						tp.PrintfLine("221 bye")
-						return
-					default:
-						tp.PrintfLine("250 ok")
-					}
-				}
-			}()
-		}
-	}()
-	_, port, _ := net.SplitHostPort(smtpd.Addr().String())
-	mailer := &Mailer{Host: "127.0.0.1", Port: port, From: "rushbin <no-reply@example.com>"}
+	mailer := fakeMailer(t, mails)
 	mail := func() sent {
 		t.Helper()
 		select {

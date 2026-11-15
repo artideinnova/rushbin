@@ -1405,6 +1405,7 @@ async function renderTeam() {
   const owner = ME.role === 'owner';
   const roleOpts = r => ROLES.map(([k, l]) => `<option value="${k}"${k === r ? ' selected' : ''}>${l}</option>`).join('');
   const macs = m => m.macs.map(c => `<span class="mac">${esc(c.name)}${owner || m.id === tm.me ? ` <button class="act" data-mac="${c.id}" data-name="${esc(c.name)}">${t('disconnect')}</button>` : ''}</span>`).join('');
+  let pairs = ME.role !== 'viewer'; // who may connect a Mac
   v.innerHTML = `<div class="team">
     <h2 class="lead">${esc(tm.name)}${owner ? ` <button class="act" data-teamname>${t('rename')}</button>` : ''}</h2>
     <p class="lead-sub">${t('team.siteSub')}</p>
@@ -1420,7 +1421,7 @@ async function renderTeam() {
       <button class="act primary">${t('invite.go')}</button><div id="invitelink"></div>
       ${tm.invites.length ? `<div style="margin-top:14px">${tm.invites.map(i => `<div class="member"><div><b>${esc(i.email)}</b><span>${t('invite.pending', { role: ROLE_IN[i.role] })}</span></div>
         <button type="button" class="act" data-revoke="${esc(i.email)}">${t('invite.cancel')}</button></div>`).join('')}</div>` : ''}</form>` : ''}
-    ${ME.role !== 'viewer' ? `<div class="card"><h4>${t('team.pairTitle')}</h4><p class="note">${t('team.pairNote', { team: esc(tm.name) })}</p>
+    ${pairs ? `<div class="card"><h4>${t('team.pairTitle')}</h4><p class="note">${t('team.pairNote', { team: esc(tm.name) })}</p>
       <button class="act primary" data-pair>${t('team.pairBtn')}</button></div>` : ''}
     <form class="form card" data-profile><h4>${t('profile.title')}</h4><label for="p-name">${t('profile.name')}</label><input id="p-name" name="name" value="${esc(ME.name)}" required>
       <button class="act">${t('profile.save')}</button></form>

@@ -32,8 +32,9 @@ func words(t *testing.T, lang string) map[string]any {
 	if i < 0 || j < i {
 		t.Fatalf("%s.js: no I18N.words(...)", lang)
 	}
-	var w map[string]any
-	if err := json.Unmarshal([]byte(s[i+len("I18N.words("):j]), &w); err != nil {
+	var w map[string]any // a line that is only a comment is not JSON: it goes (the browser reads the file as a script)
+	body := regexp.MustCompile(`(?m)^[ \t]*//.*\n`).ReplaceAllString(s[i+len("I18N.words("):j], "")
+	if err := json.Unmarshal([]byte(body), &w); err != nil {
 		t.Fatalf("%s.js: %v", lang, err)
 	}
 	return w
@@ -156,7 +157,8 @@ func translation(t *testing.T, lang string, en map[string]any) {
 func TestTranslationKeysUsed(t *testing.T) {
 	en := words(t, "en")
 	used := map[string]bool{}
-	for _, f := range []string{"web/index.html", "web/login.html", "web/i18n.js"} {
+	pages := []string{"web/index.html", "web/login.html", "web/i18n.js"}
+	for _, f := range pages {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
