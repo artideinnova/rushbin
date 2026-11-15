@@ -119,13 +119,14 @@ func TestApp(t *testing.T) {
 	if code := post("/api/decide", `{"content":"`+dups[0].Content+`","kind":"copy","value":"B|nowhere.mp4"}`, true); code != 400 {
 		t.Fatalf("copy that does not exist: %d, want 400", code)
 	}
-	for _, d := range []string{
-		`{"content":"` + dups[0].Content + `","kind":"copy","value":"B|C/clip.mp4"}`,
-		`{"content":"` + other.Content + `","kind":"vote","value":"discard"}`,
-	} {
-		if code := post("/api/decide", d, true); code != 200 {
-			t.Fatalf("decide %s: %d", d, code)
-		}
+	if code := post("/api/decide", `[{"content":"`+other.Content+`","kind":"vote","value":"discard"},{"content":"`+dups[0].Content+`","kind":"copy","value":"B|nowhere.mp4"}]`, true); code != 400 {
+		t.Fatalf("many decisions, one wrong: %d, want 400", code)
+	}
+	if d := app.catalog().decision(other.Content); d.Vote != "" {
+		t.Fatalf("one wrong decision among many, and the others were saved: %+v", d)
+	}
+	if code := post("/api/decide", `[{"content":"`+dups[0].Content+`","kind":"copy","value":"B|C/clip.mp4"},{"content":"`+other.Content+`","kind":"vote","value":"discard"}]`, true); code != 200 {
+		t.Fatalf("many decisions at once: %d", code)
 	}
 	// The copies wait for the check byte for byte, which runs only when asked: then the trash can take them.
 	var plan []Move

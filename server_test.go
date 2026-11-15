@@ -619,11 +619,24 @@ func TestServer(t *testing.T) {
 	if d := app.catalog().decision(other4.Content); d.Vote != "discard" || d.VoteBy != "Bea" {
 		t.Fatalf("Dana's app has %+v, want discard by Bea", d)
 	}
+	// Bea votes and Dana's Mac has not asked yet; then Dana decides on the Mac, many at once (an array, one request
+	// to the site): Bea's vote, older on the site, still reaches the Mac.
+	ok(call(bea, "POST", "/api/decide", `{"content":"`+other4.Content+`","kind":"vote","value":"showreel"}`, true))
 	rec := httptest.NewRecorder()
 	clipC := app.catalog().byKey["A|P/clip.mp4"].Content
-	app.decide(rec, httptest.NewRequest("POST", "/api/decide", strings.NewReader(`{"content":"`+clipC+`","kind":"copy","value":"A|P/clip.mp4"}`)))
-	if rec.Code != 200 {
-		t.Fatalf("decision from the app: %d %s", rec.Code, rec.Body)
+	app.decide(rec, httptest.NewRequest("POST", "/api/decide", strings.NewReader(`[{"content":"`+clipC+`","kind":"copy","value":"A|P/clip.mp4"}]`)))
+	var back []DecisionLine
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &back) != nil || len(back) != 1 || back[0].By != "Dana" {
+		t.Fatalf("decisions from the app: %d %s", rec.Code, rec.Body)
+	}
+	app.pull()
+	if d := app.catalog().decision(other4.Content); d.Vote != "showreel" {
+		t.Fatalf("Bea's vote taken before Dana's decision never reached Dana's Mac: %+v", d)
+	}
+	ok(call(bea, "POST", "/api/decide", `[`+decide+`]`, true)) // back as it was, many at once on the site too
+	app.pull()
+	if d := app.catalog().decision(other4.Content); d.Vote != "discard" {
+		t.Fatalf("Dana's app has %+v, want discard again", d)
 	}
 	var dups []Group
 	jsonOf(ok(call(bea, "GET", "/api/dups", "", false)), &dups)
@@ -748,8 +761,8 @@ func TestServer(t *testing.T) {
 	if left != 0 {
 		t.Fatalf("%d accounts in no team after Other was deleted, Olga's among them", left)
 	}
-	if n := count(dana, "/api/sync/decisions?after=0"); n != 7 { // 4 votes and copies, 3 about the transcript
-		t.Fatalf("Artide has %d decisions, want 7", n)
+	if n := count(dana, "/api/sync/decisions?after=0"); n != 9 { // 6 votes and copies, 3 about the transcript
+		t.Fatalf("Artide has %d decisions, want 9", n)
 	}
 
 	// Wrong passwords: refused, and after 10 attempts the email waits. Counted from zero: the earlier wrong

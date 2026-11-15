@@ -60,6 +60,8 @@ type App struct {
 	verifyFor  map[string]bool // what it asked for: contents, and "" for the copies the trash waits for
 	busy       map[string]int  // mount path → reads of that drive going on now (App.reading)
 	queued     map[string]bool // mount path → a scan of it waits in queue
+	copying    bool            // a project is being copied to one drive (consolidate.go)
+	copyNote   string          // how that copy goes, or how the last one went
 
 	wmu    sync.Mutex // serializes decision writes and trash moves
 	lastID int64      // the team's last decision this Mac has (guarded by wmu)
@@ -204,6 +206,7 @@ func (a *App) routes() http.Handler {
 	m.HandleFunc("GET /live/{id}/{file}", a.serveLive)
 	m.HandleFunc("POST /api/decide", a.decide)
 	m.HandleFunc("POST /api/apply", a.apply)
+	m.HandleFunc("POST /api/consolidate", a.consolidate)
 	// Check byte for byte: the copies of the contents named (from Duplicates), or none named, those the trash
 	// waits for (from Review).
 	m.HandleFunc("POST /api/verify", func(w http.ResponseWriter, r *http.Request) {
@@ -387,27 +390,53 @@ func (c *Catalog) valid(l DecisionLine) bool {
 // decide records a vote (keep, discard, showreel or "" to clear) or the copy to keep. In a team the site
 // keeps it first, with who took it; decisions.jsonl is then the Mac's copy of the team's decisions. A decision
 // about clips on drives kept on this computer stays here, like one taken alone.
+// Many at once (an array) go to the site in one request.
 func (a *App) decide(w http.ResponseWriter, r *http.Request) {
-	var l DecisionLine
-	if json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&l) != nil || !a.catalog().valid(l) {
+	ls, many, err := readDecisions(r.Body)
+	c := a.catalog()
+	if err != nil || slices.ContainsFunc(ls, func(l DecisionLine) bool { return !c.valid(l) }) {
 		http.Error(w, "invalid decision", 400)
 		return
 	}
 	a.wmu.Lock()
 	defer a.wmu.Unlock()
-	if t := a.teamConf(); t != nil && a.catalog().shared(l) {
-		if err := t.call("POST", "/api/sync/decide", DecisionLine{Content: l.Content, Kind: l.Kind, Value: l.Value}, &l); err != nil {
+	t := a.teamConf()
+	var shared []int // which go to the site
+	var out []DecisionLine
+	for i, l := range ls {
+		if t != nil && c.shared(l) {
+			shared = append(shared, i)
+			out = append(out, DecisionLine{Content: l.Content, Kind: l.Kind, Value: l.Value})
+		} else {
+			ls[i] = DecisionLine{T: time.Now().UTC().Format(time.RFC3339Nano), Content: l.Content, Kind: l.Kind, Value: l.Value}
+		}
+	}
+	if len(out) > 0 {
+		var back []DecisionLine
+		err := t.call("POST", "/api/sync/decide", out, &back)
+		if err == nil && len(back) != len(out) {
+			err = fmt.Errorf("%d answers for %d decisions", len(back), len(out))
+		}
+		if err != nil {
 			http.Error(w, "rushbin cannot reach the team site, the decision was not saved: "+err.Error(), 502)
 			return
 		}
+		for k, i := range shared {
+			ls[i] = back[k]
+			ls[i].ID = 0 // the team's decisions come in order from pull: the one taken here does not move past others' taken meanwhile
+		}
+	}
+	for _, l := range ls {
+		if err := a.record(l); err != nil {
+			http.Error(w, "could not save the decision: "+err.Error(), 500)
+			return
+		}
+	}
+	if many {
+		send(w, ls)
 	} else {
-		l = DecisionLine{T: time.Now().UTC().Format(time.RFC3339Nano), Content: l.Content, Kind: l.Kind, Value: l.Value}
+		send(w, ls[0])
 	}
-	if err := a.record(l); err != nil {
-		http.Error(w, "could not save the decision: "+err.Error(), 500)
-		return
-	}
-	send(w, l)
 }
 
 // record appends a decision to decisions.jsonl and shows it. Callers hold wmu.
@@ -676,7 +705,7 @@ func (a *App) statusHandler(w http.ResponseWriter, r *http.Request) {
 	paused, need, content := a.pause(false), a.modelsNeeded(), a.catalog().contentDone(filepath.Join(a.dir, "thumbs"))
 	a.smu.Lock()
 	defer a.smu.Unlock()
-	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev, "busy": slices.Collect(maps.Keys(a.busy)),
+	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev, "busy": slices.Collect(maps.Keys(a.busy)), "copy": a.copyNote,
 		"background": a.background, "unreadable": append([]Pending{}, a.unreadable...), "paused": paused, "content": content,
 		"models": map[string]any{"need": need, "done": a.dlDone, "error": a.dlErr}})
 }

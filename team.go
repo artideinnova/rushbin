@@ -420,9 +420,10 @@ func (a *App) pull() {
 		return
 	}
 	a.wmu.Lock()
-	defer a.wmu.Unlock()
-	var ls []DecisionLine
-	err := t.call("GET", fmt.Sprintf("/api/sync/decisions?after=%d", a.lastID), nil, &ls)
+	after := a.lastID
+	a.wmu.Unlock()
+	var ls []DecisionLine // asked without holding wmu: a slow site would hold every decision taken here meanwhile
+	err := t.call("GET", fmt.Sprintf("/api/sync/decisions?after=%d", after), nil, &ls)
 	a.smu.Lock()
 	a.signedOut = errors.Is(err, errSignedOut) // asked every 15 s: the page knows within that
 	a.smu.Unlock()
@@ -432,7 +433,12 @@ func (a *App) pull() {
 		}
 		return
 	}
+	a.wmu.Lock()
+	defer a.wmu.Unlock()
 	for _, l := range ls {
+		if l.ID <= a.lastID { // already recorded by a pull that ran meanwhile (connecting runs one too)
+			continue
+		}
 		if err := a.record(l); err != nil {
 			log.Println("team: decisions:", err)
 			return

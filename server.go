@@ -1565,33 +1565,46 @@ func decisionLines(ctx context.Context, tx pgx.Tx, team, after int64) ([]Decisio
 
 // decide records a decision of a team member, from the site or from a Mac, with their name.
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, u *User) {
-	var l DecisionLine
-	if json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&l) != nil {
+	ls, many, err := readDecisions(r.Body)
+	if err != nil {
 		http.Error(w, "bad request", 400)
 		return
 	}
 	c, err := s.catalog(r.Context(), u.Team)
-	if err != nil || !c.valid(l) {
+	if err != nil || slices.ContainsFunc(ls, func(l DecisionLine) bool { return !c.valid(l) }) {
 		http.Error(w, "invalid decision", 400)
 		return
 	}
-	var t time.Time
 	err = s.inTeam(r.Context(), u.Team, func(tx pgx.Tx) error {
-		return tx.QueryRow(r.Context(), "insert into decision (team, content, kind, value, by_name, person) values ($1, $2, $3, $4, $5, $6) returning id, t",
-			u.Team, l.Content, l.Kind, l.Value, u.Name, u.ID).Scan(&l.ID, &t)
+		for i := range ls {
+			var t time.Time
+			if err := tx.QueryRow(r.Context(), "insert into decision (team, content, kind, value, by_name, person) values ($1, $2, $3, $4, $5, $6) returning id, t",
+				u.Team, ls[i].Content, ls[i].Kind, ls[i].Value, u.Name, u.ID).Scan(&ls[i].ID, &t); err != nil {
+				return err
+			}
+			ls[i].T, ls[i].By = t.UTC().Format(time.RFC3339Nano), u.Name
+		}
+		return nil
 	})
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	l.T, l.By = t.UTC().Format(time.RFC3339Nano), u.Name
-	c.decide(l)
-	if l.Kind == "project" { // the projects are worked out when the catalog is built
+	project := false
+	for _, l := range ls {
+		c.decide(l)
+		project = project || l.Kind == "project"
+	}
+	if project { // the projects are worked out when the catalog is built
 		s.changed(u.Team)
 	} else {
 		s.bump(u.Team)
 	}
-	send(w, l)
+	if many {
+		send(w, ls)
+	} else {
+		send(w, ls[0])
+	}
 }
 
 func (s *Server) decisionsAfter(w http.ResponseWriter, r *http.Request, u *User) {

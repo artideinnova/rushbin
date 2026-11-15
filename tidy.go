@@ -38,7 +38,8 @@ type TidyMove struct {
 	Reason string `json:"reason"`
 	OK     bool   `json:"ok"`
 	Why    string `json:"why,omitempty"`
-	Kind   string `json:"kind,omitempty"` // what moves, from what made it (tidyKind): export, audio, footage, project, graphics, other
+	Kind   string `json:"kind,omitempty"`    // what moves, from what made it (tidyKind): export, audio, footage, project, graphics, other
+	Proj   string `json:"project,omitempty"` // the project it belongs to, as the Archive names it: the person may approve one project only
 }
 
 const (
@@ -1086,10 +1087,19 @@ func (a *App) tidyRoutes(m *http.ServeMux) {
 			return ms, err
 		}
 		c, skip := a.catalog(), a.catalog().device(b.UUID).Excluded
+		proj := map[string]string{} // top folder on this drive → its project (joined across drives, renamed)
+		for _, cl := range c.list {
+			if cl.Device == b.UUID {
+				proj[part(cl.ID, 0)] = cl.Project
+			}
+		}
 		check := func(ms []TidyMove) ([]TidyMove, []TidyGap) {
 			ms = validTidy(mount, skip, ms)
 			for i := range ms {
 				ms[i].Kind = tidyKind(c, mount, ms[i].From)
+				if top, _, in := strings.Cut(ms[i].From, "/"); in { // a file at the top of the drive is in no project
+					ms[i].Proj = cmp.Or(proj[top], top)
+				}
 			}
 			return ms, tidyGaps(c, mount, skip, ms)
 		}

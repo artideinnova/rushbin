@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -112,6 +113,25 @@ type DecisionLine struct {
 	Kind    string `json:"kind"` // vote | copy | hide (the starts of every hidden line, space separated) | check ("yes" or "")
 	Value   string `json:"value"`
 	By      string `json:"by,omitempty"`
+}
+
+// readDecisions reads one decision, or many in an array (a whole project at once: one request, one transaction
+// on the site instead of one each). many says which, so the answer is the same shape.
+func readDecisions(r io.Reader) (ls []DecisionLine, many bool, err error) {
+	var raw json.RawMessage
+	if err = json.NewDecoder(io.LimitReader(r, 4<<20)).Decode(&raw); err != nil {
+		return nil, false, err
+	}
+	if many = bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")); many {
+		err = json.Unmarshal(raw, &ls)
+	} else {
+		ls = make([]DecisionLine, 1)
+		err = json.Unmarshal(raw, &ls[0])
+	}
+	if err == nil && (len(ls) == 0 || len(ls) > 10000) {
+		err = errors.New("from 1 to 10000 decisions at a time")
+	}
+	return ls, many, err
 }
 
 // apply records a decision line in m.

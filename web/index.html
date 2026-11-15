@@ -701,15 +701,26 @@ const projMove = proj => !searching() && OV?.projects?.some(p => p.project === p
   <label><span>${t('proj.name')}</span><input name="to" list="projlist" value="${esc(proj)}" maxlength="120" required></label>
   <button class="pillbtn">${t('proj.save')}</button><span class="note">${t('proj.hint')}</span>
   <datalist id="projlist">${OV.projects.filter(p => p.project && p.project !== proj).map(p => `<option value="${esc(p.project)}">`).join('')}</datalist></form>` : '';
-// A project on more than one drive: the drive that lacks least of it, and whether the rest fits there (free space as
-// at its last reading). Only the proposal: copying is not done here.
+// A project on more than one drive: one button per drive, to copy there what it lacks (free space as at its last
+// reading; the engine checks it again). The originals stay: afterwards Duplicati shows them as copies.
 function projCons(proj) {
-  const p = OV?.projects?.find(x => x.project === proj), m = p?.missing; if (!m || searching()) return '';
-  const [uuid, need] = Object.entries(m).sort((a, b) => a[1] - b[1] || num(p.disks[b[0]]) - num(p.disks[a[0]]))[0];
-  const drive = diskName(uuid), free = num(OV.devices.find(d => d.uuid === uuid)?.free);
-  return `<p class="cons">${!need ? t('cons.all', { drive: esc(drive) })
-    : t('cons.need', { drive: esc(drive), need: bytes(need), free: bytes(free) }) + ' ' + (free >= need ? t('cons.fits') : t('cons.short', { short: bytes(need - free) }))}</p>`;
+  const p = OV?.projects?.find(x => x.project === proj), m = p?.missing; if (!m || searching() || ME.site) return '';
+  const ds = Object.entries(m).sort((a, b) => a[1] - b[1] || num(p.disks[b[0]]) - num(p.disks[a[0]]));
+  const all = ds.find(([, need]) => !need);
+  if (all) return `<p class="cons">${t('cons.all', { drive: esc(diskName(all[0])) })}</p>`;
+  return `<p class="cons">${t('cons.choose')}</p><p class="cons keepon">${ds.map(([uuid, need]) => {
+    const d = OV.devices.find(x => x.uuid === uuid), free = num(d?.free), why = !d?.online ? t('cons.offline') : free < need ? t('cons.short', { short: bytes(need - free) }) : '';
+    return `<button class="chip" data-cons="${esc(uuid)}" data-proj="${esc(proj)}"${why ? ` disabled title="${esc(why)}"` : ''}>${t('cons.to', { drive: esc(diskName(uuid)), need: bytes(need) })}</button>`; }).join('')}</p>`;
 }
+$('#view').addEventListener('click', async e => {
+  const b = e.target.closest('[data-cons]'); if (!b) return;
+  const drive = diskName(b.dataset.cons);
+  if (!confirm(t('cons.confirm', { project: b.dataset.proj, drive }))) return;
+  b.disabled = true;
+  try { const r = await post('/api/consolidate', { project: b.dataset.proj, to: b.dataset.cons });
+    toast(t('cons.started', { n: r.files, size: bytes(r.bytes), drive: esc(drive) }) + (r.offline ? ' ' + t('cons.left', { n: r.offline }) : '')); poll(); }
+  catch (err) { toast(err.message); b.disabled = false; }
+});
 $('#view').addEventListener('submit', async e => {
   const f = e.target.closest('[data-projmove]'); if (!f) return; e.preventDefault();
   const from = f.dataset.projmove, to = f.to.value.trim(), roots = OV.projects.find(p => p.project === from)?.roots || [];
@@ -1131,10 +1142,9 @@ $('#view').addEventListener('click', async e => {
   if (ko) { const dev = ko.dataset.keepon, proj = ko.dataset.proj; ko.closest('.keepon').querySelectorAll('button').forEach(b => { b.disabled = true; });
     const todo = DUPS.filter(x => x.verified && !x.conflict && x.vote !== 'discard' && (keepOf(x).project || '') === proj && x.locations.some(l => l.device === dev))
       .map(x => [x, locKey(x.locations.find(l => l.device === dev))]).filter(([x, k]) => x.copy !== k); // locations: shortest path first
-    let done = 0, failed = 0;
-    const next = async () => { for (let it; (it = todo.shift());) { try { await post('/api/decide', { content: it[0].content, kind: 'copy', value: it[1] }); done++; } catch { failed++; } ko.textContent = `${done + failed}…`; } };
-    await Promise.all(Array.from({ length: 6 }, next)); // six at a time: in a team each goes to the site
-    toast(failed ? t('dups.keepFailed', { n: failed }) : t('dups.kept', { n: done, drive: ko.dataset.disk }));
+    ko.textContent = t('saving'); // one request for all of them: in a team, one to the site
+    try { if (todo.length) await post('/api/decide', todo.map(([x, k]) => ({ content: x.content, kind: 'copy', value: k })));
+      toast(t('dups.kept', { n: todo.length, drive: ko.dataset.disk })); } catch { toast(t('dups.keepFailed', { n: todo.length })); }
     renderDups(); refreshTray(); }
 });
 
@@ -1278,7 +1288,7 @@ function tidySheet() {
   const order = [...groups.values()].map(ms => Object.assign(ms, { kind: most(ms, m => m.kind), why: most(ms, m => m.reason) }))
     .sort((a, b) => TIDY_KINDS.indexOf(a.kind) - TIDY_KINDS.indexOf(b.kind) || a[0].drive.localeCompare(b[0].drive) || a[0].dest.localeCompare(b[0].dest));
   // A file shows where it comes from and why only where that differs from its group, or from its piece.
-  const row = (m, from, why) => `<label class="trow"><input type="checkbox" data-tu="${esc(m.u)}" data-ti="${m.i}" data-kind="${m.kind}"${m.kind === 'footage' ? '' : ' checked'}>
+  const row = (m, from, why) => `<label class="trow"><input type="checkbox" data-tu="${esc(m.u)}" data-ti="${m.i}" data-kind="${m.kind}" data-proj="${esc(m.project || '')}"${m.kind === 'footage' ? '' : ' checked'}>
     <span><b>${esc(baseOf(m.from))}</b>${dirOf(m.from) !== from ? `<em>${t('tidy.from', { folder: esc(dirOf(m.from)) })}</em>` : ''}${m.reason !== why ? `<em>${esc(m.reason)}</em>` : ''}</span></label>`;
   const group = ms => {
     const from = most(ms, m => dirOf(m.from)), pieces = new Map();
@@ -1291,12 +1301,14 @@ function tidySheet() {
         return (nested ? `<div class="tpiece"><b>${esc(sub)}/</b><em>${t('tidy.files', { n: ps.length })}. ${esc(pwhy)}</em></div>` : '') + ps.map(m => row(m, from, nested ? pwhy : why)).join(''); }).join('')}</div></details>`;
   };
   const kinds = TIDY_KINDS.filter(k => ok.some(m => m.kind === k)), sheet = $('#sheet'); sheet.className = 'sheet plan';
+  const projs = [...new Set(ok.map(m => m.project).filter(Boolean))].sort((a, b) => a.localeCompare(b)); // one project only: its chip
   sheet.innerHTML = `<div class="plan" style="position:relative">${X_BUTTON}
     <h3>${ok.length ? t('tidy.proposedOn', { n: ok.length, drives }) : t('tidy.nothingOn', { drives })}</h3>
     <p class="sub">${TIDY.to ? t('tidy.sheetSubTo', { to: esc(TIDY.to) }) : t('tidy.sheetSub')}</p>
     ${Object.values(TPLAN).map(tidyCheck).join('')}
     ${ok.length ? `<div class="tbulk"><span>${t('tidy.approve')}</span>${kinds.map(k => `<button class="chip" data-tkind="${k}" aria-pressed="false">${KIND_NAME[k]} <span class="n">${ok.filter(m => m.kind === k).length}</span></button>`).join('')}
       <button class="chip sep" data-tsel="1">${t('tidy.selAll')}</button><button class="chip" data-tsel="0">${t('tidy.selNone')}</button></div>` : ''}
+    ${projs.length > 1 ? `<div class="tbulk"><span>${t('tidy.onlyProject')}</span>${projs.map(p => `<button class="chip" data-tproj="${esc(p)}" aria-pressed="false">${esc(p)} <span class="n">${ok.filter(m => m.project === p).length}</span></button>`).join('')}</div>` : ''}
     ${order.map(group).join('')}
     ${no.length ? `<details class="card"><summary>${t('tidy.refused', { n: no.length })}</summary>${no.map(m => `<div class="trow"><span></span><span><b>${esc(m.from)}</b> → ${esc(m.to)}<em>${esc(I18N.from(m.why))}</em></span></div>`).join('')}</details>` : ''}
     ${ok.length ? `<div class="go tgo"><button class="act primary" data-tidyapply></button><button class="act" data-close>${t('cancel')}</button></div>` : ''}
@@ -1319,6 +1331,7 @@ function tidySync() {
   $$('#sheet .tgroup').forEach(g => { const xs = $$('[data-ti]', g), n = xs.filter(x => x.checked).length, gb = $('[data-tgroup]', g);
     gb.checked = n === xs.length; gb.indeterminate = n > 0 && n < xs.length; });
   $$('#sheet [data-tkind]').forEach(c => c.setAttribute('aria-pressed', boxes.filter(x => x.dataset.kind === c.dataset.tkind).every(x => x.checked)));
+  $$('#sheet [data-tproj]').forEach(c => c.setAttribute('aria-pressed', boxes.every(x => x.checked === (x.dataset.proj === c.dataset.tproj))));
   const n = boxes.filter(x => x.checked).length, go = $('#sheet [data-tidyapply]');
   if (go) { go.textContent = t('tidy.applyN', { n }); go.disabled = !n; }
 }
@@ -1329,6 +1342,8 @@ $('#sheet').addEventListener('click', e => {
   const k = e.target.closest('[data-tkind]');
   if (k) { const xs = $$('#sheet [data-ti]').filter(x => x.dataset.kind === k.dataset.tkind); return set(xs, !xs.every(x => x.checked)); }
   const s = e.target.closest('[data-tsel]'); if (s) return set($$('#sheet [data-ti]'), s.dataset.tsel === '1');
+  const pj = e.target.closest('[data-tproj]'); // that project's moves, all of them, and nothing else
+  if (pj) { $$('#sheet [data-ti]').forEach(x => { x.checked = x.dataset.proj === pj.dataset.tproj; }); return tidySync(); }
 });
 $('#sheet').addEventListener('change', e => { if (e.target.matches('[data-ti]')) tidySync(); });
 async function tidyApply(btn) {
@@ -1660,7 +1675,7 @@ async function poll() {
   const cannot = (st.unreadable || []).map(d => t(ME.windows ? 'unreadable.fromMac' : 'unreadable.fromPC', { name: d.name, pc: PC(), fs: d.fs || '' }));
   const m = st.models || {}, dl = !num(m.need) || !OV?.devices.some(d => d.content === true) ? ''
     : m.error ? t('models.failedNote', { why: modelsFailed(m) }) : m.done ? t('models.downloading', { done: bytes(m.done), size: bytes(m.need) }) : '';
-  $('#bgnote').textContent = st.status ? '' : [...cannot, dl, I18N.from(st.background)].filter(Boolean).join(' ');
+  $('#bgnote').textContent = st.status ? '' : [...cannot, dl, I18N.from(st.background), I18N.from(st.copy)].filter(Boolean).join(' ');
   $$('[data-opt="content"]').forEach(o => { const d = OV.devices.find(x => x.uuid === o.dataset.uuid); if (d) o.nextElementSibling.textContent = contentText(d); });
   if (st.status) $('#stat').innerHTML = `<span class="scanbar">${esc(I18N.from(st.status))}${pct !== null && st.step === 2 ? `, ${pct}%` : ''}</span>`;
   if (st.status && !OV?.devices.length) catalogProgress(st, pct);

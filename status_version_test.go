@@ -65,8 +65,9 @@ func TestDeviceRewrite(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(d, "files.jsonl"), nil, 0o644))
 	b, _ := json.Marshal(Device{UUID: "A", Name: "A", Excluded: []string{}})
 	must(t, writeFile(filepath.Join(d, "device.json"), b))
-	stop := make(chan struct{})
+	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(done)
 		for {
 			select {
 			case <-stop:
@@ -76,7 +77,7 @@ func TestDeviceRewrite(t *testing.T) {
 			}
 		}
 	}()
-	defer close(stop)
+	defer func() { close(stop); <-done }() // the writer ends before the folder is removed
 	for i := 0; i < 300; i++ {
 		c, err := loadCatalog(dir, nil)
 		must(t, err)
