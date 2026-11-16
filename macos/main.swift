@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     func feedURLString(for updater: SPUUpdater) -> String? { feed }
 
     func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
-        if feed == nil { throw NSError(domain: "rushbin", code: 1, userInfo: [NSLocalizedDescriptionKey: "No update site: not allowed to ask Artide's site, and in no team."]) }
+        if feed == nil { throw NSError(domain: "rushbin", code: 1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("rushbin cannot look for new versions: this Mac is in no team, and asking rushbin.io is off. Turn it on in Team.", comment: "")]) }
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {

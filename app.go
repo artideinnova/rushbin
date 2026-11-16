@@ -47,6 +47,7 @@ type App struct {
 	status      string
 	rev         int64  // counts the catalog reloads: the page reads the catalog again when it moves
 	background  string // long work that does not stop the app, like the proxies for the team
+	bgLeft      int    // how many items that work has left, 0 when it does not count them
 	signedOut   bool   // the team site no longer accepts this computer's token: the page asks to sign in again
 	dlDone      int64  // bytes of the model being downloaded so far (ensureModels)
 	dlErr       string // why the last model download failed, "" when it did not
@@ -896,7 +897,7 @@ func (a *App) statusHandler(w http.ResponseWriter, r *http.Request) {
 	defer a.smu.Unlock()
 	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev, "busy": slices.Collect(maps.Keys(a.busy)), "move": a.move, "copy_done": a.copyDone.Load(), "copy_total": a.copyTotal.Load(),
 		"verifying": a.verifying, "verify_off": a.verifyOff(),
-		"background": a.background, "unreadable": append([]Pending{}, a.unreadable...), "paused": paused, "content": content,
+		"background": a.background, "background_left": a.bgLeft, "unreadable": append([]Pending{}, a.unreadable...), "paused": paused, "content": content,
 		"models": map[string]any{"need": need, "done": a.dlDone, "error": a.dlErr}})
 }
 

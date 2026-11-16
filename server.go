@@ -1153,9 +1153,7 @@ func (s *Server) makeReset(w http.ResponseWriter, r *http.Request, u *User) {
 		fail(w, err)
 		return
 	}
-	s.offer(w, r, email, Letter{Subject: "A new password for rushbin", Text: u.Name + ", an admin of " + u.TeamName + ", made you a link to choose a new rushbin password.",
-		Button: "Choose a new password", Link: siteURL(r) + "/login#reset=" + tok,
-		After: fmt.Sprintf("The link works once, for %d days. Every device signed in with the old password will need to sign in again.", linkDays)})
+	s.offer(w, r, email, letter(mailLang(r), "reset", siteURL(r)+"/login#reset="+tok, "name", u.Name, "team", u.TeamName))
 }
 
 // invite makes a link for one email and one role, valid 7 days and once. The site emails it when it can, else the
@@ -1186,10 +1184,8 @@ func (s *Server) invite(w http.ResponseWriter, r *http.Request, u *User) {
 		fail(w, err)
 		return
 	}
-	s.offer(w, r, f.Email, Letter{Subject: u.Name + " invited you to " + u.TeamName + " on rushbin",
-		Text:   u.Name + " invited you to " + u.TeamName + ", the team's video archive on rushbin, as " + map[string]string{"owner": "an admin", "editor": "a member", "viewer": "a guest"}[f.Role] + ".",
-		Button: "Join " + u.TeamName, Link: siteURL(r) + "/login#invite=" + tok,
-		After: fmt.Sprintf("The link works once, for %d days. If you did not expect it, ignore this email.", linkDays)})
+	lang := mailLang(r) // the inviter's: the invited has no account yet
+	s.offer(w, r, f.Email, letter(lang, "invite", siteURL(r)+"/login#invite="+tok, "name", u.Name, "team", u.TeamName, "role", mailWords[lang]["role."+f.Role]))
 }
 
 func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, u *User) {

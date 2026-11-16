@@ -338,7 +338,7 @@ func inventory(root, out string, excluded []string) (int, error) {
 	for r := range recs {
 		enc.Encode(r)
 		n++
-		progress(1, int64(n), 0)
+		progress(1, int64(n), int64(len(prev))) // the last reading's count: an estimate of the total, when there is one
 	}
 	if err := w.Flush(); err != nil {
 		return 0, err

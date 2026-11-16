@@ -53,7 +53,7 @@ const field = (id, label, type = 'text', auto = '') =>
 const esc = v => String(v).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const link = new URLSearchParams(location.hash.slice(1));
 const mode = ['invite', 'reset', 'setup', 'forgot'].find(k => link.has(k)) || 'login';
-const H = { 'X-Rushbin': '1', 'Content-Type': 'application/json' };
+const H = { 'X-Rushbin': '1', 'X-Rushbin-Lang': document.documentElement.lang, 'Content-Type': 'application/json' }; // the emails go in the language chosen here
 addEventListener('hashchange', () => location.reload()); // the links between the forms below
 let SITE = {};
 $('#lang').innerHTML = I18N.picker();

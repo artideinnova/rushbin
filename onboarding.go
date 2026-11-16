@@ -101,10 +101,7 @@ func (s *Server) forgot(w http.ResponseWriter, r *http.Request) {
 			fail(w, err)
 			return
 		}
-		l := Letter{Subject: "A new password for rushbin",
-			Text:   "Someone, hopefully you, asked for a new rushbin password for this address. If it was not you, ignore this email: nothing changes.",
-			Button: "Choose a new password", Link: siteURL(r) + "/login#reset=" + tok,
-			After: "The link works once, for 1 hour. Every device signed in with the old password will need to sign in again."}
+		l := letter(mailLang(r), "forgot", siteURL(r)+"/login#reset="+tok)
 		go func() {
 			if err := s.mail(context.Background(), f.Email, l); err != nil {
 				log.Println("mail:", err)

@@ -261,7 +261,7 @@ func (a *App) speechNext() bool {
 	}
 	sort.Slice(todo, func(i, j int) bool { return todo[i].Project+todo[i].ID < todo[j].Project+todo[j].ID })
 	cl := todo[0]
-	a.setBackground(fmt.Sprintf("Speech recognition: %d to go", len(todo)))
+	a.setLeft(fmt.Sprintf("Speech recognition: %d to go", len(todo)), len(todo))
 	done := a.reading(cl.Path)
 	segs, err := transcribe(whisper, models, cl)
 	done()

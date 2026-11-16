@@ -48,3 +48,4 @@
 "Report a Problem" = "問題を報告";
 "Eject %@" = "%@を取り出す";
 "%@: rushbin is reading it" = "%@：rushbinが読み込み中";
+"rushbin cannot look for new versions: this Mac is in no team, and asking rushbin.io is off. Turn it on in Team." = "rushbin は新しいバージョンを確認できません。この Mac はチームに参加しておらず、rushbin.io への確認がオフになっています。「チーム」でオンにしてください。";

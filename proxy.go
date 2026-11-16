@@ -44,7 +44,7 @@ func (a *App) proxyNext() bool {
 	}
 	sort.Slice(todo, func(i, j int) bool { return todo[i].Project+todo[i].ID < todo[j].Project+todo[j].ID })
 	cl := todo[0]
-	a.setBackground(fmt.Sprintf("Proxies: %d to go", len(todo)))
+	a.setLeft(fmt.Sprintf("Proxies: %d to go", len(todo)), len(todo))
 	defer a.reading(cl.Path)()
 	if err := a.makeProxy(t, cl); err != nil {
 		log.Printf("proxy %s: %v", cl.Path, err)
@@ -58,9 +58,13 @@ func (a *App) proxyNext() bool {
 	return true
 }
 
-func (a *App) setBackground(s string) {
+func (a *App) setBackground(s string) { a.setLeft(s, 0) }
+
+// setLeft says the background job and how many items it has left (0 when it does not count them): the page
+// estimates the time left from how fast that number falls.
+func (a *App) setLeft(s string, left int) {
 	a.smu.Lock()
-	a.background = s
+	a.background, a.bgLeft = s, left
 	a.smu.Unlock()
 }
 

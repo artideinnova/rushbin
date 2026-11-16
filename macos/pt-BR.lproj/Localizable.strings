@@ -48,3 +48,4 @@
 "Report a Problem" = "Relatar um problema";
 "Eject %@" = "Ejetar %@";
 "%@: rushbin is reading it" = "%@: o rushbin está lendo";
+"rushbin cannot look for new versions: this Mac is in no team, and asking rushbin.io is off. Turn it on in Team." = "O rushbin não pode procurar novas versões: este Mac não está em nenhuma equipe e a consulta ao rushbin.io está desligada. Ligue-a em Equipe.";

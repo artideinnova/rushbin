@@ -69,11 +69,13 @@ func TestOnboarding(t *testing.T) {
 	}
 
 	browser := func() *http.Client { jar, _ := cookiejar.New(nil); return &http.Client{Jar: jar} }
+	accept := "" // the Accept-Language of the next requests: the language of the emails they make
 	call := func(c *http.Client, path, body string) (int, string) {
 		t.Helper()
 		req, _ := http.NewRequest("POST", srv.URL+path, strings.NewReader(body))
 		req.Header.Set("X-Rushbin", "1")
 		req.Header.Set("Origin", srv.URL)
+		req.Header.Set("Accept-Language", accept)
 		r, err := c.Do(req)
 		must(t, err)
 		defer r.Body.Close()
@@ -237,16 +239,20 @@ func TestOnboarding(t *testing.T) {
 	s.mailer = mailer
 	must(t, json.Unmarshal([]byte(want(200, ann, "/api/team/invite", `{"email":"dee@example.com","role":"editor"}`)), &inv))
 	m := mail()
-	if !inv.Mailed || m.To != "dee@example.com" || !strings.Contains(m.Subject, "Ann invited you to Studio") || !strings.Contains(m.Text, inv.URL) {
+	if !inv.Mailed || m.To != "dee@example.com" || !strings.Contains(m.Subject, "Ann invited you to Studio") || !strings.Contains(m.Text, inv.URL) ||
+		!strings.Contains(m.HTML, `<html lang="en">`) || !strings.Contains(m.Text, "as a member.") {
 		t.Fatalf("emailed invite %+v: %+v", inv, m)
 	}
 	dee := browser()
 	want(200, dee, "/api/auth/join", `{"token":"`+linkIn(m, "invite")+`","name":"Dee","password":"deedeedeedee"}`)
 	want(200, http.DefaultClient, "/api/auth/forgot", `{"email":"nobody@example.com"}`) // the same answer, and no email
+	// The email is in the language of who asks for it.
+	accept = "ja-JP,ja;q=0.9,en;q=0.8"
 	want(200, http.DefaultClient, "/api/auth/forgot", `{"email":"carl@example.com"}`)
+	accept = ""
 	m = mail()
-	if m.To != "carl@example.com" {
-		t.Fatalf("password link to %s, want carl@example.com", m.To)
+	if m.To != "carl@example.com" || m.Subject != mailWords["ja"]["forgot.subject"] || !strings.Contains(m.HTML, `<html lang="ja">`) {
+		t.Fatalf("password link to %s: %q, want carl@example.com in Japanese", m.To, m.Subject)
 	}
 	// A link sent by email works for an hour; one an owner hands over, 7 days.
 	_, err = s.admin.Exec(ctx, "update reset set created = now() - interval '61 minutes'")
@@ -260,8 +266,12 @@ func TestOnboarding(t *testing.T) {
 	var owners struct{ URL string }
 	carl = browser() // the new password ended his sessions
 	want(200, carl, "/api/auth/login", `{"email":"carl@example.com","password":"carl-new-password"}`)
+	accept = "de-CH, fr;q=0.5" // a password link an admin makes: in the admin's language
 	must(t, json.Unmarshal([]byte(want(200, carl, "/api/team/reset", `{"id":`+itoa(carlID(t, s))+`}`)), &owners))
-	mail()
+	accept = ""
+	if m = mail(); m.Subject != mailWords["de"]["reset.subject"] || !strings.Contains(m.HTML, `<html lang="de">`) {
+		t.Fatalf("password link by an admin %q, want German", m.Subject)
+	}
 	_, err = s.admin.Exec(ctx, "update reset set created = now() - interval '6 days'")
 	must(t, err)
 	want(200, browser(), "/api/auth/reset", `{"token":"`+owners.URL[strings.Index(owners.URL, "=")+1:]+`","password":"carl-newer-password"}`)

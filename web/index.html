@@ -243,6 +243,7 @@
   .movebar .mtext { flex: 1 1 320px; } .movebar .macts { display: flex; flex-wrap: wrap; gap: 8px; }
   .movebar .progress { display: block; max-width: none; margin: 8px 0 0; }
   .mopt { display: flex; align-items: center; gap: 10px; }
+  .noplay { position: absolute; left: 16px; right: 16px; bottom: 76px; margin: 0; padding: 10px 14px; border-radius: 14px; background: var(--glass-strong); font-size: 13px; }
   .projmove { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin: 4px 0 16px; }
   .projmove label { display: grid; gap: 4px; font-size: 12px; color: var(--ink-3); }
   .projmove input { height: 40px; min-width: 260px; padding: 0 14px; border-radius: 12px; border: 0; background: var(--fill); color: var(--ink); font: inherit; font-size: 14px; }
@@ -529,7 +530,7 @@ function human(sec) {
 }
 // eta: the time left of a long job, from its pace since this page first saw it (key names the job; done and total in
 // any unit, bytes for a copy). Nothing in the first 20 s, nor before it moves: too early to say.
-const ETA = {};
+const ETA = {}, BGMAX = {}; // BGMAX: the most items a background job had left, as this page saw it
 function eta(key, done, total) {
   done = num(done); total = num(total);
   if (!total || done >= total) { delete ETA[key]; return ''; }
@@ -547,7 +548,8 @@ function bytes(b) {
   return u(b ? Math.max(1, Math.round(b / 1e6)) : 0, 'megabyte', 0);
 }
 const thumb = (t, k = 3) => `/thumbs/${encodeURIComponent(t)}/${k}.jpg`;
-function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800); }
+// A toast stays as long as it takes to read it (an error is often long), at least 2 s; a click closes it.
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), Math.max(2000, String(m).length * 70)); }
 // The engine's and the site's messages are English: I18N.from says them in the page's language.
 async function api(path) {
   const r = await fetch(path);
@@ -557,7 +559,7 @@ async function api(path) {
   return j;
 }
 async function post(path, body) {
-  const r = await fetch(path, { method: 'POST', headers: { 'X-Rushbin': '1', 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const r = await fetch(path, { method: 'POST', headers: { 'X-Rushbin': '1', 'X-Rushbin-Lang': document.documentElement.lang, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
   if (!r.ok) throw new Error(I18N.from((await r.text()).trim()) || t('err.noanswerShort'));
   return r.json();
 }
@@ -860,6 +862,7 @@ async function openClip(i) {
     : ME.site && ME.role === 'owner' ? `<div class="card"><h4>${t('privacy.title')}</h4><button class="act" data-forget>${t('privacy.remove')}</button></div>` : '';
   sheet.innerHTML = `<div class="viewer">${c.removed ? `<div class="big"><span class="note">${t('removed.title')}</span></div></div>` : `<div class="big"><img id="bigimg" src="${thumb(r.thumb)}" alt="${esc(t('clip.frameAlt', { name: c.name }))}">
       ${canPlay ? `<button class="playbtn" data-play aria-label="${t('player.play')}"><svg width="26" height="30" viewBox="0 0 26 30"><path d="M2 2.5v25a1.5 1.5 0 0 0 2.3 1.3l20-12.5a1.5 1.5 0 0 0 0-2.6l-20-12.5A1.5 1.5 0 0 0 2 2.5z" fill="currentColor"/></svg></button>` : ''}</div>
+      ${!canPlay && ME.site ? `<p class="noplay">${t('player.noProxy')}</p>` : ''}
       <div class="strip">${[1,2,3,4,5].map(k => `<button data-k="${k}"${k === 3 ? ' class="on"' : ''} aria-label="${t('clip.frameN', { k })}"><img src="${thumb(r.thumb, k)}" alt=""></button>`).join('')}</div></div>`}
     <div class="info" style="position:relative">
       <button class="x" aria-label="${t('close')}" data-close><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
@@ -934,7 +937,7 @@ async function startPlay(at = 0) {
   const c = cur?.c, l = c?.locations?.find(x => x.online);
   let proxy = null;
   if (!l) {
-    if (!(ME.site ? c?.proxy : ME.team)) return toast(t('player.connect'));
+    if (!(ME.site ? c?.proxy : ME.team)) return toast(t(ME.site ? 'player.noProxy' : 'player.connect'));
     try { proxy = (await api('/api/proxy/' + encodeURIComponent(cur.r.thumb))).url; } catch (e) { return toast(e.message); }
     if (cur?.c !== c) return;
   }
@@ -1047,6 +1050,7 @@ $('#veil').addEventListener('click', e => {
   const mg = e.target.closest('[data-mgo]'); if (mg) return startMove(mg);
   const my = e.target.closest('[data-myes]'); if (my) { my.disabled = true; return post('/api/consolidate/cancel').then(() => { closeClip(); poll(); }, err => toast(err.message)); }
   const ty = e.target.closest('[data-tyes]'); if (ty) return emptyTrash(ty);
+  if (e.target.closest('[data-ayes]')) { const then = ASKED; ASKED = null; closeClip(); return then?.(); }
   if (e.target.closest('[data-verify]')) return post('/api/verify').then(() => { closeClip(); toast(t('toast.verify')); poll(); }, err => toast(err.message));
   const ta = e.target.closest('[data-tidyapply]'); if (ta) return tidyApply(ta);
   const vb = e.target.closest('[data-vote]'); if (vb) return vote(sel, vb.dataset.vote);
@@ -1216,6 +1220,14 @@ async function emptyTrash(btn) {
   try { await post('/api/trash/empty', { uuid: x.uuid }); } catch (e) { toast(e.message); btn.disabled = false; return; }
   toast(t('trash.done', { size: bytes(x.bytes), drive: x.drive })); closeClip(); await refreshTrash(); show(S.view); poll();
 }
+let ASKED = null;
+function ask(title, sub, yes, then) {
+  ASKED = then; const sheet = $('#sheet'); sheet.className = 'sheet plan';
+  sheet.innerHTML = `<div class="plan" style="position:relative"><button class="x" aria-label="${t('close')}" data-close><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+    <h3>${title}</h3><p class="sub">${sub}</p>
+    <div class="go"><button class="act danger" data-ayes>${yes}</button><button class="act" data-close>${t('cancel')}</button></div></div>`;
+  openSheet();
+}
 function openSheet() { $('#veil').classList.add('open'); $('#veil').setAttribute('aria-hidden', 'false'); $('#tray').classList.remove('show'); $('#sheet [data-close]')?.focus(); }
 
 /* ---------- Moving a project to one drive ---------- */
@@ -1333,7 +1345,7 @@ function renderDisks() {
         : `<dt>${t('drive.only')}</dt><dd>${d.unique ? t('drive.onlyText', { clips: clips(d.unique), size: bytes(d.unique_bytes) }) : t('drive.onlyNone')}</dd>`}<dt>${t('drive.skipped')}</dt><dd>${esc((d.excluded || []).join(', ') || t('drive.noFolders'))}</dd>
         ${ME.site || d.retired ? '' : optRow(d, 'content', t('opt.content'), '', contentText(d))
           + (ME.team ? optRow(d, 'local', t('opt.local'), t('opt.localCost')) : '')
-          + (ME.team && d.local !== true ? optRow(d, 'copies', t('opt.copies'), t('opt.copiesCost', { size: bytes(num(d.seconds) / 3600 * COPY_PER_HOUR) })) : '')}</dl>
+          + (ME.team && d.local !== true ? optRow(d, 'copies', t('opt.copies'), '', isOn(d, 'copies') ? t('opt.on') : t('opt.copiesOff', { size: bytes(num(d.seconds) / 3600 * COPY_PER_HOUR) })) : '')}</dl>
       <div class="acts disk-acts">${d.retired ? '' : `<button class="act primary" data-ondisk="${esc(d.uuid)}" data-name="${esc(d.name)}">${t('drive.show')}</button>`}
         ${ME.site || d.retired || !d.online ? '' : `<button class="act" data-tidy="${esc(d.uuid)}" data-name="${esc(d.name)}">${t('tidy.title')}</button>`}
         ${ME.site ? '' : `<details class="dmore"><summary class="act">${t('more')}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5l3 3 3-3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></summary>
@@ -1387,11 +1399,15 @@ function tidyProv(changed) {
 const TIDY_KINDS = ['footage', 'export', 'audio', 'project', 'graphics', 'other'];
 const KIND_NAME = { export: t('kind.export'), audio: t('kind.audio'), footage: t('kind.footage'), project: t('kind.project'), graphics: t('kind.graphics'), other: t('kind.other') };
 async function tidyStart(b) {
+  const t0 = Date.now(), tick = setInterval(() => { if (b.disabled && b.dataset.base) b.textContent = `${b.dataset.base} ${t('tidy.elapsed', { time: human((Date.now() - t0) / 1000) })}`; }, 1000);
+  try { await tidyRun(b); } finally { clearInterval(tick); delete b.dataset.base; }
+}
+async function tidyRun(b) {
   const label = b.textContent, drives = b.dataset.tidy === 'all'
     ? OV.devices.filter(d => d.online && !d.retired).map(d => ({ uuid: d.uuid, name: d.name })) : [{ uuid: b.dataset.tidy, name: b.dataset.name }];
   b.disabled = true; TPLAN = {};
   for (const [i, d] of drives.entries()) {
-    b.textContent = drives.length > 1 ? t('tidy.askingDrive', { name: d.name, i: i + 1, n: drives.length }) : t('tidy.asking');
+    b.textContent = b.dataset.base = drives.length > 1 ? t('tidy.askingDrive', { name: d.name, i: i + 1, n: drives.length }) : t('tidy.asking');
     TIDY = await api('/api/tidy?uuid=' + encodeURIComponent(d.uuid)).catch(() => ({})); // which way to the AI, for this drive: the confirmation names it
     if (!TIDY.site && !TIDY.ready) {
       toast(OV.devices.find(x => x.uuid === d.uuid)?.local === true ? t('tidy.keptToast', { pc: PC() }) : t('tidy.needKey'));
@@ -1633,7 +1649,8 @@ $('#view').addEventListener('click', async e => {
     catch (err) { toast(err.message); ok.disabled = false; }
     return;
   }
-  if (e.target.closest('[data-disconnect]')) { await post('/api/team/disconnect').catch(() => {}); await reloadMe(); renderTeam(); return; }
+  if (e.target.closest('[data-disconnect]')) return ask(t('team.disconnectTitle', { pc: PC() }), t('team.disconnectSub', { pc: PC() }), t('team.disconnect', { pc: PC() }),
+    async () => { await post('/api/team/disconnect').catch(() => {}); await reloadMe(); renderTeam(); });
   if (e.target.closest('[data-logout]')) { await post('/api/auth/logout').catch(() => {}); location.href = '/login'; return; }
   if (e.target.closest('[data-logoutall]')) { await post('/api/me/logout').catch(() => {}); location.href = '/login'; return; }
   const cp = e.target.closest('[data-copy]'); if (cp) { navigator.clipboard.writeText(cp.dataset.copy).then(() => toast(t('toast.linkCopied'))); return; }
@@ -1816,7 +1833,10 @@ async function poll() {
   const cannot = (st.unreadable || []).map(d => t(ME.windows ? 'unreadable.fromMac' : 'unreadable.fromPC', { name: d.name, pc: PC(), fs: d.fs || '' }));
   const m = st.models || {}, dl = !num(m.need) || !OV?.devices.some(d => d.content === true) ? ''
     : m.error ? t('models.failedNote', { why: modelsFailed(m) }) : m.done ? t('models.downloading', { done: bytes(m.done), size: bytes(m.need) }) : '';
-  $('#bgnote').textContent = st.status ? '' : [...cannot, dl, I18N.from(st.background)].filter(Boolean).join(' ');
+  const bg = I18N.from(st.background), bgLeft = num(st.background_left), job = String(st.background).split(':')[0];
+  if (bgLeft) BGMAX[job] = Math.max(BGMAX[job] || 0, bgLeft);
+  const bgEta = bgLeft ? eta('bg/' + job, BGMAX[job] - bgLeft, BGMAX[job]) : '';
+  $('#bgnote').textContent = st.status ? '' : [...cannot, dl, bg && bgEta ? `${bg}, ${bgEta}` : bg].filter(Boolean).join(' ');
   renderMove(st);
   $$('[data-opt="content"]').forEach(o => { const d = OV.devices.find(x => x.uuid === o.dataset.uuid); if (d) o.nextElementSibling.textContent = contentText(d); });
   const left = eta(`step${st.step}/${num(st.total)}`, st.done, st.total); // previews, analysis: they have a total
@@ -1827,7 +1847,7 @@ async function poll() {
   STATUS = st.status;
 }
 // The first catalog of a drive: which of the 4 steps is running and how far it is.
-const STEPS = { 1: [1, t('step.read')], 3: [2, t('step.previews')], 4: [3, t('step.look')] }; // step → its place and name
+const STEPS = { 1: [1, t('step.read')], 2: [2, t('step.verify')], 3: [3, t('step.previews')], 4: [4, t('step.look')] }; // step → its place and name
 function catalogProgress(st, pct) {
   if (!$('#catprog')) $('#view').innerHTML = `<div class="empty" id="catprog" role="status"><h2>${t('cat.title')}</h2>
     <p class="step"></p><div class="progress" role="progressbar" aria-label="${t('cat.progress')}"><i></i></div><p class="scanbar detail"></p>
@@ -1875,6 +1895,10 @@ $('#view').addEventListener('click', async e => {
   }
   if (e.target.closest('details.dmore .menu')) e.target.closest('details.dmore').removeAttribute('open'); // a choice closes the menu
   const o = e.target.closest('[data-opt]');
+  if (o && o.dataset.opt === 'local' && o.dataset.val === '1' && !o.dataset.sure) { // stops sending: the site forgets the drive
+    const d = OV.devices.find(x => x.uuid === o.dataset.uuid);
+    return ask(t('local.title', { name: esc(d?.name || '') }), t('local.sub'), t('local.yes'), () => { o.dataset.sure = '1'; o.click(); });
+  }
   if (o) {
     const want = o.dataset.val === '1';
     try { await post('/api/drives', { uuid: o.dataset.uuid, action: 'options', [o.dataset.opt]: want }); } catch (err) { toast(err.message); return; }
