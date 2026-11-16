@@ -57,13 +57,14 @@ type App struct {
 	done       int64           // how far the step is: files, bytes or clips
 	total      int64           // 0 when not known in advance
 	queue      chan string
-	verifyNow  chan struct{}   // the page asked to check copies byte for byte (App.verify)
-	verifyFor  map[string]bool // what it asked for: contents, and "" for the copies the trash waits for
-	busy       map[string]int  // mount path → reads of that drive going on now (App.reading)
-	queued     map[string]bool // mount path → a scan of it waits in queue
-	copyTo     string          // the drive a project is being copied to (consolidate.go), "" when none
-	copyNote   string          // how that copy goes, or how the last one went
-	copyDone   atomic.Int64    // bytes of that copy done, of copyTotal (0 when none runs): not guarded by smu
+	verifyNow  chan struct{}     // the page asked to check copies byte for byte (App.verify)
+	verifyFor  map[string]bool   // what it asked for: contents, and "" for the copies the trash waits for
+	busy       map[string]int    // mount path → reads of that drive going on now (App.reading)
+	queued     map[string]bool   // mount path → a scan of it waits in queue
+	copyTo     string            // the drive a project is being copied to (consolidate.go), "" when none
+	copyNote   string            // how that copy goes, or how the last one went
+	after      map[string]func() // what waits for the next reading of a drive (by mount): keepProject
+	copyDone   atomic.Int64      // bytes of that copy done, of copyTotal (0 when none runs): not guarded by smu
 	copyTotal  atomic.Int64
 
 	wmu    sync.Mutex // serializes decision writes and trash moves
@@ -401,9 +402,23 @@ func (a *App) decide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid decision", 400)
 		return
 	}
+	if code, err := a.saveDecisions(ls); err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	if many {
+		send(w, ls)
+	} else {
+		send(w, ls[0])
+	}
+}
+
+// saveDecisions keeps decisions ls, valid ones, filling in each its time (and, in a team, who and its number):
+// in a team the ones shared go to the site first. On failure nothing is kept here and the code is the HTTP status.
+func (a *App) saveDecisions(ls []DecisionLine) (int, error) {
 	a.wmu.Lock()
 	defer a.wmu.Unlock()
-	t := a.teamConf()
+	c, t := a.catalog(), a.teamConf()
 	var shared []int // which go to the site
 	var out []DecisionLine
 	for i, l := range ls {
@@ -421,8 +436,7 @@ func (a *App) decide(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("%d answers for %d decisions", len(back), len(out))
 		}
 		if err != nil {
-			http.Error(w, "rushbin cannot reach the team site, the decision was not saved: "+err.Error(), 502)
-			return
+			return 502, fmt.Errorf("rushbin cannot reach the team site, the decision was not saved: %w", err)
 		}
 		for k, i := range shared {
 			ls[i] = back[k]
@@ -431,15 +445,10 @@ func (a *App) decide(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, l := range ls {
 		if err := a.record(l); err != nil {
-			http.Error(w, "could not save the decision: "+err.Error(), 500)
-			return
+			return 500, fmt.Errorf("could not save the decision: %w", err)
 		}
 	}
-	if many {
-		send(w, ls)
-	} else {
-		send(w, ls[0])
-	}
+	return 0, nil
 }
 
 // record appends a decision to decisions.jsonl and shows it. Callers hold wmu.
@@ -1031,8 +1040,7 @@ func (a *App) scanner() {
 	for {
 		select { // a drive cataloged, or changed by hand, reaches the team site right away
 		case mount := <-a.queue:
-			a.catalog1(mount)
-			a.share()
+			a.scanned(mount)
 			continue
 		case <-a.shareNow:
 			a.share()
@@ -1079,8 +1087,7 @@ func (a *App) scanner() {
 		if why != "" || !a.proxyNext() {
 			select {
 			case mount := <-a.queue:
-				a.catalog1(mount)
-				a.share()
+				a.scanned(mount)
 			case <-a.shareNow:
 				a.share()
 			case <-a.verifyNow:
@@ -1088,6 +1095,20 @@ func (a *App) scanner() {
 			case <-time.After(time.Minute):
 			}
 		}
+	}
+}
+
+// scanned catalogs a drive and sends it to the team, then runs what waited for a reading of it that starts after it
+// asked (App.after): the team site knows the drive's files by then.
+func (a *App) scanned(mount string) {
+	a.smu.Lock()
+	then := a.after[mount]
+	delete(a.after, mount)
+	a.smu.Unlock()
+	a.catalog1(mount)
+	a.share()
+	if then != nil {
+		then()
 	}
 }
 

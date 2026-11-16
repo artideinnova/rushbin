@@ -633,6 +633,8 @@ I18N.words({
   "Sending {name} to the team": "Invio di {name} al team",
   "Copying {project} to {drive}: {done} of {total} files": "Copia di {project} sul {drive}: {done} di {total} file",
   "{project} copied to {drive}: {n} files": "{project} copiato sul {drive}: {n} file",
+  "{project} copied to {drive}: {n} files; {changed} clips that had another drive chosen now keep it": "{project} copiato sul {drive}: {n} file; {changed} clip che avevano scelto un altro disco ora tengono questo",
+  "{project} copied to {drive}: {n} files; keeping it there for the whole project was not saved: {why}": "{project} copiato sul {drive}: {n} file; la scelta di tenerlo lì per tutto il progetto non è stata salvata: {why}",
   "{project} on {drive}: {copied} files copied, {failed} not: {why}": "{project} sul {drive}: {copied} file copiati, {failed} no: {why}",
   "Not enough free space on the drive": "Spazio libero insufficiente sul disco",
   "A project is already being copied": "Si sta già copiando un progetto",

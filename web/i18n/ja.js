@@ -633,6 +633,8 @@ I18N.words({
   "Sending {name} to the team": "{name}をチームに送信中",
   "Copying {project} to {drive}: {done} of {total} files": "{project} を {drive} にコピー中：{total} ファイル中 {done}",
   "{project} copied to {drive}: {n} files": "{project} を {drive} にコピーしました：{n} ファイル",
+  "{project} copied to {drive}: {n} files; {changed} clips that had another drive chosen now keep it": "{project} を {drive} にコピーしました：{n} ファイル。別のドライブを選んでいた {changed} 本のクリップは、今後このドライブのコピーを残します",
+  "{project} copied to {drive}: {n} files; keeping it there for the whole project was not saved: {why}": "{project} を {drive} にコピーしました：{n} ファイル。プロジェクト全体をそこに残す選択は保存されませんでした：{why}",
   "{project} on {drive}: {copied} files copied, {failed} not: {why}": "{drive} の {project}：{copied} ファイルをコピー、{failed} ファイルは失敗：{why}",
   "Not enough free space on the drive": "ドライブの空き容量が足りません",
   "A project is already being copied": "別のプロジェクトをコピー中です",

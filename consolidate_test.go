@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,7 +18,7 @@ import (
 // each file once; what only a drive not connected has is counted; nothing already there is overwritten.
 func TestConsolidate(t *testing.T) {
 	a, b := t.TempDir(), t.TempDir()
-	c := &Catalog{byCont: map[string][]*Clip{}, files: map[string]Rec{}}
+	c := &Catalog{byCont: map[string][]*Clip{}, files: map[string]Rec{}, dec: map[string]*Decision{}}
 	c.Devices = []*DeviceInfo{{Device: Device{UUID: "A", Name: "T9", Mount: a}, Online: true},
 		{Device: Device{UUID: "B", Name: "LaCie", Mount: b}, Online: true}, {Device: Device{UUID: "C", Name: "Old", Mount: "/Volumes/Old"}}}
 	mtime := time.Date(2026, 2, 27, 16, 59, 55, 0, time.UTC)
@@ -52,7 +56,7 @@ func TestConsolidate(t *testing.T) {
 		if _, ok := want[cp.To]; !ok || filepath.Dir(cp.From) == filepath.Dir(cp.To) {
 			t.Fatalf("copy %+v goes to the wrong place", cp)
 		}
-		err := copyChecked(cp.From, cp.To, mtime, io.Discard)
+		orig, back, err := copyChecked(cp.From, cp.To, mtime, io.Discard)
 		if filepath.Base(cp.To) == "c.mov" {
 			if !errors.Is(err, errExists) {
 				t.Fatalf("over another file by the same name: %v", err)
@@ -65,6 +69,11 @@ func TestConsolidate(t *testing.T) {
 		if !bytes.Equal(got, []byte(want[cp.To])) || !st.ModTime().Equal(mtime) {
 			t.Fatalf("%s: %q at %v", cp.To, got, st.ModTime())
 		}
+		sum := fmt.Sprintf("%x\t", sha256.Sum256(got)) // the check done while copying: Duplicati does not read them again
+		src, _ := os.Stat(cp.From)
+		if orig != sum+stamp(cp.From, src.Size(), src.ModTime().Unix()) || runtime.GOOS == "darwin" && back != sum+stamp(cp.To, st.Size(), mtime.Unix()) {
+			t.Fatalf("hashes %q and %q for %s", orig, back, cp.To)
+		}
 	}
 	if got, _ := os.ReadFile(filepath.Join(a, "Sanremo2026", "Footage", "c.mov")); string(got) != "other" {
 		t.Fatal("a file already on the drive was overwritten")
@@ -74,6 +83,20 @@ func TestConsolidate(t *testing.T) {
 	}
 	if _, _, err := consolidation(c, "Sanremo2026", "C"); err == nil {
 		t.Fatal("copying to a drive not connected")
+	}
+
+	// Once T9 is read again with the copies, each clip of the project keeps its copy there: a.mov was kept on the
+	// LaCie by an earlier choice, which changes; b.mov had none; c.mov is only on the LaCie, nothing to choose.
+	app := &App{dir: t.TempDir(), cat: c}
+	c.decide(DecisionLine{Content: "c:a", Kind: "copy", Value: "B|BILLBOARD - SANREMO 2026/Footage/a.mov"})
+	cl := &Clip{Device: "A", ID: "Sanremo2026/Footage/b.mov", Path: filepath.Join(a, "Sanremo2026", "Footage", "b.mov"), Project: "Sanremo2026", Content: "c:b", Size: 6}
+	c.list, c.byCont["c:b"] = append(c.list, cl), append(c.byCont["c:b"], cl)
+	app.keepProject("Sanremo2026", "A", "T9", 2)
+	if c.decision("c:a").Copy != "A|Sanremo2026/Footage/a.mov" || c.decision("c:b").Copy != "A|Sanremo2026/Footage/b.mov" || c.decision("c:c").Copy != "" {
+		t.Fatalf("kept: a %q, b %q, c %q", c.decision("c:a").Copy, c.decision("c:b").Copy, c.decision("c:c").Copy)
+	}
+	if !strings.Contains(app.copyNote, "1 clips that had another drive chosen now keep it") {
+		t.Fatalf("note %q", app.copyNote)
 	}
 }
 
