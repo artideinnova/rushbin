@@ -11,10 +11,10 @@
 "Paste" = "Einsetzen";
 "Quit rushbin" = "rushbin beenden";
 "Select All" = "Alles auswählen";
-"The engine could not start: %@" = "Die Engine konnte nicht starten: %@";
-"The engine did not answer." = "Die Engine hat nicht geantwortet.";
-"The engine is missing from the app." = "Die Engine fehlt in der App.";
-"The engine stopped (code %d). Quit and reopen rushbin." = "Die Engine wurde beendet (Code %d). Beende rushbin und öffne es erneut.";
+"rushbin could not start: %@" = "rushbin konnte nicht starten: %@";
+"rushbin did not answer." = "rushbin hat nicht geantwortet.";
+"Part of rushbin is missing: download the app again." = "Ein Teil von rushbin fehlt: Lade die App erneut herunter.";
+"rushbin stopped (code %d). Quit and reopen it." = "rushbin ist stehen geblieben (Code %d). Beende es und öffne es erneut.";
 "Window" = "Fenster";
 "Check for Updates…" = "Nach Updates suchen …";
 "Services" = "Dienste";

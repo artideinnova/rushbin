@@ -96,8 +96,11 @@ func TestConsolidate(t *testing.T) {
 	if c.decision("c:a").Copy != "A|Sanremo2026/Footage/a.mov" || c.decision("c:b").Copy != "A|Sanremo2026/Footage/b.mov" || c.decision("c:c").Copy != "" {
 		t.Fatalf("kept: a %q, b %q, c %q", c.decision("c:a").Copy, c.decision("c:b").Copy, c.decision("c:c").Copy)
 	}
-	if app.copyNote != "Sanremo2026 is all on T9: 2 files copied. For 1 clips you had chosen LaCie: now this one counts" {
+	if app.copyNote != "Sanremo2026 is all on T9: 2 files copied. For 1 clips you had chosen LaCie: now this is the project drive" {
 		t.Fatalf("note %q", app.copyNote)
+	}
+	if j, _ := json.Marshal((&Catalog{byCont: map[string][]*Clip{}}).Dups()); string(j) != "[]" { // the page reads .length
+		t.Fatalf("no duplicates as %s", j)
 	}
 }
 

@@ -44,11 +44,11 @@ func (a *App) proxyNext() bool {
 	}
 	sort.Slice(todo, func(i, j int) bool { return todo[i].Project+todo[i].ID < todo[j].Project+todo[j].ID })
 	cl := todo[0]
-	a.setBackground(fmt.Sprintf("Videos for the team: %d to go", len(todo)))
+	a.setBackground(fmt.Sprintf("Proxies: %d to go", len(todo)))
 	defer a.reading(cl.Path)()
 	if err := a.makeProxy(t, cl); err != nil {
 		log.Printf("proxy %s: %v", cl.Path, err)
-		a.setBackground(fmt.Sprintf("Videos for the team: could not make %s", cl.Name))
+		a.setBackground(fmt.Sprintf("Proxies: could not make %s", cl.Name))
 		if a.failed == nil {
 			a.failed = map[string]bool{}
 		}
@@ -176,7 +176,7 @@ func (a *App) proxyPlay(w http.ResponseWriter, r *http.Request) {
 		URL string `json:"url"`
 	}
 	if err := t.call("GET", "/api/proxy/"+r.PathValue("thumb"), nil, &out); err != nil {
-		http.Error(w, "No video of this clip for the team yet: connect the drive", 404)
+		http.Error(w, "No proxy of this clip yet: connect the drive", 404)
 		return
 	}
 	send(w, out)

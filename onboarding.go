@@ -73,7 +73,7 @@ const mailedLink = time.Hour
 // the address has one or not, and as quickly (the email goes after the answer), so nobody learns who is on the site.
 func (s *Server) forgot(w http.ResponseWriter, r *http.Request) {
 	if s.mailer == nil {
-		http.Error(w, "This site does not send email: ask an owner of your team for a password link", 404)
+		http.Error(w, "This site does not send email: ask an admin of your team for a password link", 404)
 		return
 	}
 	f, ok := readForm(w, r)

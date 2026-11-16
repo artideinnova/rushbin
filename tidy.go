@@ -665,7 +665,7 @@ func validTidy(mount string, skip []string, ms []TidyMove) []TidyMove {
 		case strings.HasPrefix("/"+from, "/.") || strings.Contains(from, "/.") || strings.HasPrefix("/"+to, "/.") || strings.Contains(to, "/."):
 			m.Why = "Hidden system files stay where they are"
 		case within(from, trash) || within(to, trash):
-			m.Why = "Into or out of the trash"
+			m.Why = "Into or out of the files to delete"
 		case from == to:
 			m.Why = "Onto itself"
 		case within(to, from):
@@ -1228,7 +1228,7 @@ func (s *Server) tidy(w http.ResponseWriter, r *http.Request, u *User) {
 			return err
 		}
 		if n >= s.tidyCap {
-			return httpError{429, fmt.Sprintf("Your team has used its %d tidy-ups with AI for this month: more from the first of next month", s.tidyCap)}
+			return httpError{429, fmt.Sprintf("Your team has used its %d folder tidy-ups for this month: more from the first of next month", s.tidyCap)}
 		}
 		_, err := tx.Exec(r.Context(), "insert into tidy_run (team) values ($1)", u.Team)
 		return err

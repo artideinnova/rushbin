@@ -11,10 +11,10 @@
 "Paste" = "Incolla";
 "Quit rushbin" = "Esci da rushbin";
 "Select All" = "Seleziona tutto";
-"The engine could not start: %@" = "Impossibile avviare il motore: %@";
-"The engine did not answer." = "Il motore non ha risposto.";
-"The engine is missing from the app." = "Il motore manca dall'app.";
-"The engine stopped (code %d). Quit and reopen rushbin." = "Il motore si è fermato (codice %d). Esci e riapri rushbin.";
+"rushbin could not start: %@" = "Impossibile avviare rushbin: %@";
+"rushbin did not answer." = "rushbin non ha risposto.";
+"Part of rushbin is missing: download the app again." = "Manca una parte di rushbin: scarica di nuovo l'app.";
+"rushbin stopped (code %d). Quit and reopen it." = "rushbin si è fermato (codice %d). Esci e riaprilo.";
 "Window" = "Finestra";
 "Check for Updates…" = "Verifica aggiornamenti…";
 "Services" = "Servizi";
@@ -24,7 +24,7 @@
 "Redo" = "Ripristina";
 "Go" = "Vai";
 "Archive" = "Archivio";
-"Duplicates" = "Duplicati";
+"Duplicates" = "Doppioni";
 "Drives" = "Dischi";
 "Team" = "Team";
 "Search" = "Cerca";

@@ -214,7 +214,7 @@ func TestServer(t *testing.T) {
 	if body := ok(call(bea, "POST", "/api/sync/tidy", `{"desc":"Drive: 1 files"}`, true)); asked != 2 || strings.Contains(body, siteKey) {
 		t.Fatalf("Bea, an editor: %s, asked %d", body, asked)
 	}
-	if code, msg := inApp("POST", "/api/tidy/propose", `{"uuid":"A","via":"site"}`); code != 502 || asked != 2 || !strings.Contains(msg, "used its 2 tidy-ups with AI for this month") {
+	if code, msg := inApp("POST", "/api/tidy/propose", `{"uuid":"A","via":"site"}`); code != 502 || asked != 2 || !strings.Contains(msg, "used its 2 folder tidy-ups for this month") {
 		t.Fatalf("past the month's cap: %d %s, asked %d", code, msg, asked)
 	}
 	ok(call(olga, "POST", "/api/sync/tidy", `{"desc":"Drive: 1 files"}`, true)) // Other counts its own

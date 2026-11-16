@@ -725,7 +725,7 @@ func (c *Catalog) device(id string) *DeviceInfo {
 
 // Dups lists contents found in more than one place, biggest saving first.
 func (c *Catalog) Dups() []Group {
-	var gs []Group
+	gs := []Group{} // none is [] for the page, not null: it reads .length
 	for content, cs := range c.byCont {
 		if len(cs) > 1 {
 			gs = append(gs, c.group(content))

@@ -233,10 +233,10 @@ func (a *App) analyze() bool {
 	}
 	defer out.Close()
 	if len(dirs) > 0 { // lines come back only for these; the embeddings are files
-		a.setStatus("Looking at the footage: 0 of %d", len(dirs))
+		a.setStatus("Picture recognition: 0 of %d", len(dirs))
 		a.setProgress(4, 0, int64(len(dirs)))
 	} else {
-		a.setStatus("Preparing search by content: %d clips", len(lines))
+		a.setStatus("Preparing picture recognition: %d clips", len(lines))
 	}
 	cmd := background(vis, args...)
 	cmd.Stdin = strings.NewReader(strings.Join(lines, "\n") + "\n")
@@ -260,7 +260,7 @@ func (a *App) analyze() bool {
 		line, _ := json.Marshal(map[string]any{"thumb": filepath.Base(v.Dir), "frames": v.Frames})
 		out.Write(append(line, '\n'))
 		n++
-		a.setStatus("Looking at the footage: %d of %d", n, len(dirs))
+		a.setStatus("Picture recognition: %d of %d", n, len(dirs))
 		a.setProgress(4, int64(n), int64(len(dirs)))
 	}
 	if err := cmd.Wait(); err != nil {

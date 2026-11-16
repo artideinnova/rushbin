@@ -312,7 +312,7 @@ func (a *App) push(t *Team, id string) error {
 		}
 	}
 	for i, th := range todo {
-		a.setStatus("Sending %s to the team: previews %d of %d", name, i+1, len(todo))
+		a.setStatus("Sending %s to the team: frames %d of %d", name, i+1, len(todo))
 		for k := 1; k <= 5; k++ {
 			f, err := os.Open(filepath.Join(a.dir, "thumbs", th, fmt.Sprintf("%d.jpg", k)))
 			if err != nil {
@@ -479,7 +479,7 @@ func (a *App) originalsLoop() {
 func (a *App) viaTeam(w http.ResponseWriter, r *http.Request) {
 	t := a.teamConf()
 	if t == nil {
-		http.Error(w, "Connect this Mac to a team to get originals from other Macs", 404)
+		http.Error(w, "Connect this Mac to a team to download originals from other Macs", 404)
 		return
 	}
 	var out json.RawMessage

@@ -11,10 +11,10 @@
 "Paste" = "Pegar";
 "Quit rushbin" = "Salir de rushbin";
 "Select All" = "Seleccionar todo";
-"The engine could not start: %@" = "El motor no pudo iniciarse: %@";
-"The engine did not answer." = "El motor no respondió.";
-"The engine is missing from the app." = "Falta el motor en la app.";
-"The engine stopped (code %d). Quit and reopen rushbin." = "El motor se detuvo (código %d). Sal de rushbin y vuelve a abrirlo.";
+"rushbin could not start: %@" = "No se pudo iniciar rushbin: %@";
+"rushbin did not answer." = "rushbin no respondió.";
+"Part of rushbin is missing: download the app again." = "Falta una parte de rushbin: vuelve a descargar la app.";
+"rushbin stopped (code %d). Quit and reopen it." = "rushbin se detuvo (código %d). Sal y vuelve a abrirlo.";
 "Window" = "Ventana";
 "Check for Updates…" = "Buscar actualizaciones…";
 "Services" = "Servicios";

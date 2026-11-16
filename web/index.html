@@ -985,7 +985,7 @@ function nextTile() { const tiles = $$('.tile').map(x => +x.dataset.i); return t
 /* ---------- Trash: review and move ---------- */
 let PLAN = [];
 // A copy that waits for the check byte for byte, which runs only when asked (reading files whole takes long).
-const unverified = m => !m.ok && m.why === 'Copies not yet verified byte for byte';
+const unverified = m => !m.ok && m.why === 'Duplicates not verified with checksums yet';
 async function refreshTray() {
   try { PLAN = await api('/api/plan'); } catch { return; }
   const ok = PLAN.filter(m => m.ok), wait = PLAN.filter(unverified), tr = $('#tray'), sum = a => bytes(a.reduce((x, m) => x + num(m.size), 0));

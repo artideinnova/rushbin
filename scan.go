@@ -171,7 +171,7 @@ func checkDuplicates(catalog, id, name string) error {
 	if err != nil {
 		return err
 	}
-	say("%s: checking %d possible duplicates byte for byte", name, len(todo))
+	say("%s: verifying %d possible duplicates with checksums", name, len(todo))
 	return fullHash(todo, filepath.Join(catalog, "disks", id, "fullhash.tsv"))
 }
 

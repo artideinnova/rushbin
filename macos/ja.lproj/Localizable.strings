@@ -11,10 +11,10 @@
 "Paste" = "ペースト";
 "Quit rushbin" = "rushbinを終了";
 "Select All" = "すべてを選択";
-"The engine could not start: %@" = "エンジンを起動できませんでした：%@";
-"The engine did not answer." = "エンジンが応答しませんでした。";
-"The engine is missing from the app." = "アプリにエンジンが見つかりません。";
-"The engine stopped (code %d). Quit and reopen rushbin." = "エンジンが停止しました（コード%d）。rushbinを終了して、もう一度開いてください。";
+"rushbin could not start: %@" = "rushbinを起動できませんでした：%@";
+"rushbin did not answer." = "rushbinが応答しませんでした。";
+"Part of rushbin is missing: download the app again." = "rushbinの一部が見つかりません。アプリをもう一度ダウンロードしてください。";
+"rushbin stopped (code %d). Quit and reopen it." = "rushbinが停止しました（コード%d）。終了して、もう一度開いてください。";
 "Window" = "ウインドウ";
 "Check for Updates…" = "アップデートを確認…";
 "Services" = "サービス";

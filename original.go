@@ -299,7 +299,7 @@ func (s *Server) sent(w http.ResponseWriter, r *http.Request, u *User) {
 			res.Body.Close()
 		}
 		if err != nil || res.ContentLength != qs[0].Size {
-			state, note = "failed", "The file in the store is not complete"
+			state, note = "failed", "The file on the team site is not complete"
 		}
 	}
 	err = s.inTeam(r.Context(), u.Team, func(tx pgx.Tx) error {
@@ -424,11 +424,11 @@ func (a *App) upload(q Request, up Upload) (string, []string, error) {
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil || st.Size() != cl.Size {
-		return "", nil, fmt.Errorf("the file changed after the scan: scan the drive again")
+		return "", nil, fmt.Errorf("the file changed after the drive was read: read the drive again")
 	}
 	n, each := partsOf(st.Size())
 	if up.UploadID != "" && int64(len(up.Parts)) != n {
-		return "", nil, fmt.Errorf("the file changed after the scan: scan the drive again")
+		return "", nil, fmt.Errorf("the file changed after the drive was read: read the drive again")
 	}
 	a.setBackground("Sending " + cl.Name + " to the team")
 	defer a.setBackground("")
@@ -465,7 +465,7 @@ func (a *App) upload(q Request, up Upload) (string, []string, error) {
 	}
 	sum := hex.EncodeToString(h.Sum(nil))
 	if cl.FullHash != "" && !strings.EqualFold(cl.FullHash, sum) {
-		return sum, nil, fmt.Errorf("the file read now differs from the one cataloged: scan the drive again")
+		return sum, nil, fmt.Errorf("the file read now differs from the one in the catalog: read the drive again")
 	}
 	return sum, etags, nil
 }

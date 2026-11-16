@@ -329,7 +329,7 @@ func serveClip(w http.ResponseWriter, r *http.Request, c *Catalog) {
 	cl := c.byKey[r.URL.Query().Get("device")+"|"+r.URL.Query().Get("id")]
 	if cl == nil {
 		w.WriteHeader(404)
-		send(w, map[string]string{"error": "This clip is no longer in the catalog. Connect its drive to scan it again."})
+		send(w, map[string]string{"error": "This clip is no longer in the catalog. Connect its drive to read it again."})
 		return
 	}
 	g := c.group(cl.Content)
@@ -564,7 +564,7 @@ func (a *App) setBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 // whyUnverified: a copy waits for the check byte for byte, which the page asks for (App.verify).
-const whyUnverified = "Copies not yet verified byte for byte"
+const whyUnverified = "Duplicates not verified with checksums yet"
 
 // verify reads byte for byte every copy, on a connected drive, of the contents the page asked for: groups from
 // Duplicates, or the ones the plan cannot move yet because their copies are not verified (Review). Only when
@@ -591,7 +591,7 @@ func (a *App) verify() {
 		}
 	}
 	for id, paths := range byDrive {
-		say("%s: checking %d possible duplicates byte for byte", c.device(id).Name, len(paths))
+		say("%s: verifying %d possible duplicates with checksums", c.device(id).Name, len(paths))
 		done := a.reading(paths[0])
 		if err := fullHash(paths, filepath.Join(a.dir, "disks", id, "fullhash.tsv")); err != nil {
 			log.Printf("verify %s: %v", id, err)
@@ -616,7 +616,7 @@ func (a *App) check(c *Catalog, m Move, mount string, cl *Clip, keep string) str
 		}
 		k := c.byKey[keep]
 		if k == nil || !c.device(k.Device).Online || !fileExists(k.Path) {
-			return "The copy to keep is on a drive that is not connected"
+			return "The copy that stays is on a drive that is not connected"
 		}
 	}
 	st, err := os.Lstat(m.From)
@@ -625,10 +625,10 @@ func (a *App) check(c *Catalog, m Move, mount string, cl *Clip, keep string) str
 		return "No longer in that place"
 	}
 	if st.Size() != rec.Size || st.ModTime().UTC().Format(time.RFC3339) != rec.Mtime {
-		return "Changed after the scan: it will be scanned again"
+		return "Changed after the drive was read: it will be read again"
 	}
 	if _, err := os.Lstat(m.To); err == nil {
-		return "Already in the trash"
+		return "Already set aside to delete"
 	}
 	return ""
 }
@@ -1080,7 +1080,7 @@ func (a *App) scanner() {
 		// One light copy for the team, then the rest again. With nothing to do, wait for a drive, or a
 		// minute (the team may have been connected, or the computer plugged in, meanwhile).
 		if why = a.pause(true); why != "" {
-			a.setBackground("Content search and copies for the team wait: " + why)
+			a.setBackground("Recognition and proxies wait: " + why)
 		} else {
 			a.setBackground("")
 		}
@@ -1124,7 +1124,7 @@ func (a *App) catalog1(mount string) {
 	id, err := scan(a.dir, mount, "", "", nil)
 	if err != nil {
 		log.Printf("scan %s: %v", mount, err)
-		a.setStatus("Could not catalog %s: %v", filepath.Base(mount), err)
+		a.setStatus("Could not read %s: %v", filepath.Base(mount), err)
 		return
 	}
 	a.reload()
@@ -1158,7 +1158,7 @@ func (a *App) thumbs(id string) {
 		}
 	}
 	if len(todo) > 0 {
-		a.setStatus("Making previews: 0 of %d", len(todo))
+		a.setStatus("Extracting frames: 0 of %d", len(todo))
 		a.setProgress(3, 0, int64(len(todo)))
 	}
 	jobs := make(chan *Clip)
@@ -1189,7 +1189,7 @@ func (a *App) thumbs(id string) {
 				}
 				nmu.Lock()
 				n++
-				a.setStatus("Making previews: %d of %d", n, len(todo))
+				a.setStatus("Extracting frames: %d of %d", n, len(todo))
 				a.setProgress(3, int64(n), int64(len(todo)))
 				nmu.Unlock()
 			}

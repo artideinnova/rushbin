@@ -205,7 +205,7 @@ func (a *App) consolidate(w http.ResponseWriter, r *http.Request) {
 	}
 	a.smu.Unlock()
 	if busy {
-		http.Error(w, "A project is already being copied", 409)
+		http.Error(w, "A project is already being consolidated", 409)
 		return
 	}
 	if len(todo) > 0 {
@@ -231,7 +231,7 @@ func (a *App) runConsolidation(project, id, drive, mount string, todo []consCopy
 	defer a.copyTotal.Store(0)
 	copied, failed, why := 0, 0, ""
 	for i, c := range todo {
-		say(fmt.Sprintf("Copying %s to %s: %d of %d files", project, drive, i+1, len(todo)))
+		say(fmt.Sprintf("Consolidating %s to %s: %d of %d files", project, drive, i+1, len(todo)))
 		t, _ := time.Parse(time.RFC3339, c.Mtime)
 		stop := a.reading(c.From)
 		orig, cp, err := copyChecked(c.From, c.To, t, counter{&a.copyDone})
@@ -257,7 +257,7 @@ func (a *App) runConsolidation(project, id, drive, mount string, todo []consCopy
 	if failed > 0 {
 		a.copyNote = fmt.Sprintf("%s on %s: %d files copied, %d not: %s", project, drive, copied, failed, why)
 	} else {
-		a.copyNote = fmt.Sprintf("%s copied to %s: %d files", project, drive, copied)
+		a.copyNote = fmt.Sprintf("%s consolidated to %s: %d files", project, drive, copied)
 		if a.after == nil {
 			a.after = map[string]func(){}
 		}
@@ -296,17 +296,17 @@ func (a *App) keepProject(project, id, drive string, copied int) {
 		_, err = a.saveDecisions(ls[:n])
 		ls = ls[n:]
 	}
-	note := fmt.Sprintf("%s copied to %s: %d files", project, drive, copied)
+	note := fmt.Sprintf("%s consolidated to %s: %d files", project, drive, copied)
 	if len(before) > 0 {
 		names := slices.Sorted(maps.Keys(before))
 		n := 0
 		for _, k := range names {
 			n += before[k]
 		}
-		note = fmt.Sprintf("%s is all on %s: %d files copied. For %d clips you had chosen %s: now this one counts", project, drive, copied, n, strings.Join(names, ", "))
+		note = fmt.Sprintf("%s is all on %s: %d files copied. For %d clips you had chosen %s: now this is the project drive", project, drive, copied, n, strings.Join(names, ", "))
 	}
 	if err != nil {
-		note = fmt.Sprintf("%s copied to %s: %d files; keeping it there for the whole project was not saved: %s", project, drive, copied, err)
+		note = fmt.Sprintf("%s consolidated to %s: %d files; it could not be saved as the project drive: %s", project, drive, copied, err)
 	}
 	a.smu.Lock()
 	a.copyNote = note

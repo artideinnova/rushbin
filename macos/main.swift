@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     }
 
     func startEngine() {
-        guard let exe = Bundle.main.url(forAuxiliaryExecutable: "rushbin-engine") else { return fail(NSLocalizedString("The engine is missing from the app.", comment: "")) }
+        guard let exe = Bundle.main.url(forAuxiliaryExecutable: "rushbin-engine") else { return fail(NSLocalizedString("Part of rushbin is missing: download the app again.", comment: "")) }
         let p = Process()
         p.executableURL = exe
         p.arguments = ["app"]
@@ -79,9 +79,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         p.standardInput = engineInput
         p.standardOutput = out
         p.terminationHandler = { [weak self] proc in
-            DispatchQueue.main.async { if NSApp.isRunning, proc.terminationReason != .exit || proc.terminationStatus != 0 { self?.fail(String(format: NSLocalizedString("The engine stopped (code %d). Quit and reopen rushbin.", comment: ""), proc.terminationStatus)) } }
+            DispatchQueue.main.async { if NSApp.isRunning, proc.terminationReason != .exit || proc.terminationStatus != 0 { self?.fail(String(format: NSLocalizedString("rushbin stopped (code %d). Quit and reopen it.", comment: ""), proc.terminationStatus)) } }
         }
-        do { try p.run() } catch { return fail(String(format: NSLocalizedString("The engine could not start: %@", comment: ""), error.localizedDescription)) }
+        do { try p.run() } catch { return fail(String(format: NSLocalizedString("rushbin could not start: %@", comment: ""), error.localizedDescription)) }
         engine = p
         watchConditions()
         watchVolumes()
@@ -95,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
                 line = Data()
                 DispatchQueue.main.async { self.engineSaid(s) }
             }
-            DispatchQueue.main.async { if self.url == nil { self.fail(NSLocalizedString("The engine did not answer.", comment: "")) } }
+            DispatchQueue.main.async { if self.url == nil { self.fail(NSLocalizedString("rushbin did not answer.", comment: "")) } }
         }
     }
 

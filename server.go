@@ -362,9 +362,9 @@ func (s *Server) routes() http.Handler {
 				return
 			}
 			if action != "" && !u.may(action) {
-				http.Error(w, map[string]string{"decide": "You can only look in this team: ask an owner to make you an editor",
-					"send": "Only editors and owners can send drives to the team", "tidy": "Only editors and owners can tidy drives with AI",
-					"manage": "Only the team's owners can do this"}[action], 403)
+				http.Error(w, map[string]string{"decide": "You can only look in this team: ask an admin to make you a member",
+					"send": "Only members and admins can send drives to the team", "tidy": "Only members and admins can tidy folders",
+					"manage": "Only the team's admins can do this"}[action], 403)
 				return
 			}
 			h(w, r, u)
@@ -647,7 +647,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request, person, team int
 		return
 	}
 	if device != "" && role == "viewer" {
-		http.Error(w, "Only editors and owners can connect a Mac: ask an owner of "+teamName, 403)
+		http.Error(w, "Only members and admins can connect a Mac: ask an admin of "+teamName, 403)
 		return
 	}
 	tok, err := s.startSession(w, r, s.admin, person, team, device)
@@ -1053,7 +1053,7 @@ func ownersLeft(ctx context.Context, tx pgx.Tx, team int64) error {
 		return err
 	}
 	if n == 0 {
-		return httpError{400, "The team needs at least one owner"}
+		return httpError{400, "The team needs at least one admin"}
 	}
 	return nil
 }
@@ -1070,7 +1070,7 @@ func (s *Server) setRole(w http.ResponseWriter, r *http.Request, u *User) {
 	err := s.inTeam(r.Context(), u.Team, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(r.Context(), "update member set role = $1 where team = $2 and person = $3", f.Role, u.Team, f.ID)
 		if err != nil || tag.RowsAffected() != 1 {
-			return httpError{404, "Not a member of this team"}
+			return httpError{404, "This person is not in this team"}
 		}
 		if f.Role == "viewer" { // a viewer's Macs stop sending
 			if _, err := tx.Exec(r.Context(), "delete from session where team = $1 and person = $2 and device <> ''", u.Team, f.ID); err != nil {
@@ -1096,7 +1096,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u *User) {
 	err := s.inTeam(r.Context(), u.Team, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(r.Context(), "delete from member where team = $1 and person = $2", u.Team, f.ID)
 		if err != nil || tag.RowsAffected() != 1 {
-			return httpError{404, "Not a member of this team"}
+			return httpError{404, "This person is not in this team"}
 		}
 		if _, err := tx.Exec(r.Context(), "delete from session where team = $1 and person = $2", u.Team, f.ID); err != nil {
 			return err
@@ -1138,7 +1138,7 @@ func (s *Server) makeReset(w http.ResponseWriter, r *http.Request, u *User) {
 	var email string
 	err := s.inTeam(r.Context(), u.Team, func(tx pgx.Tx) error {
 		if tx.QueryRow(r.Context(), "select p.email from member m join person p on p.id = m.person where m.team = $1 and m.person = $2", u.Team, f.ID).Scan(&email) != nil {
-			return httpError{404, "Not a member of this team"}
+			return httpError{404, "This person is not in this team"}
 		}
 		if !onlyIn(r.Context(), s.admin, f.ID, u.Team) {
 			return errOtherTeams
@@ -1153,7 +1153,7 @@ func (s *Server) makeReset(w http.ResponseWriter, r *http.Request, u *User) {
 		fail(w, err)
 		return
 	}
-	s.offer(w, r, email, Letter{Subject: "A new password for rushbin", Text: u.Name + ", an owner of " + u.TeamName + ", made you a link to choose a new rushbin password.",
+	s.offer(w, r, email, Letter{Subject: "A new password for rushbin", Text: u.Name + ", an admin of " + u.TeamName + ", made you a link to choose a new rushbin password.",
 		Button: "Choose a new password", Link: siteURL(r) + "/login#reset=" + tok,
 		After: fmt.Sprintf("The link works once, for %d days. Every device signed in with the old password will need to sign in again.", linkDays)})
 }
@@ -1187,7 +1187,7 @@ func (s *Server) invite(w http.ResponseWriter, r *http.Request, u *User) {
 		return
 	}
 	s.offer(w, r, f.Email, Letter{Subject: u.Name + " invited you to " + u.TeamName + " on rushbin",
-		Text:   u.Name + " invited you to " + u.TeamName + ", the team's video archive on rushbin, as " + map[string]string{"owner": "an owner", "editor": "an editor", "viewer": "a viewer"}[f.Role] + ".",
+		Text:   u.Name + " invited you to " + u.TeamName + ", the team's video archive on rushbin, as " + map[string]string{"owner": "an admin", "editor": "a member", "viewer": "a guest"}[f.Role] + ".",
 		Button: "Join " + u.TeamName, Link: siteURL(r) + "/login#invite=" + tok,
 		After: fmt.Sprintf("The link works once, for %d days. If you did not expect it, ignore this email.", linkDays)})
 }
@@ -1949,7 +1949,7 @@ func (s *Server) proxyPlay(w http.ResponseWriter, r *http.Request, u *User) {
 	th := r.PathValue("thumb")
 	c, err := s.catalog(r.Context(), u.Team)
 	if err != nil || s.store == nil || !c.proxies[th] {
-		http.Error(w, "No video of this clip for the team yet", 404)
+		http.Error(w, "No proxy of this clip yet", 404)
 		return
 	}
 	send(w, map[string]string{"url": s.store.presign("GET", proxyKey(u.Team, th), time.Hour, time.Now())})
