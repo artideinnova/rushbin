@@ -153,10 +153,13 @@ func scan(catalog, vol, id, name string, excluded []string) (string, error) {
 	progress(1, 0, 0)
 
 	start := time.Now()
+	before := map[string]Rec{}
+	eachRec(filepath.Join(dir, "files.jsonl"), func(r Rec) { before[r.Path] = r })
 	n, err := inventory(vol, filepath.Join(dir, "files.jsonl"), excluded)
 	if err != nil {
 		return "", err
 	}
+	followMoves(dir, before) // on a failure the clips moved are only checked again
 	say("%s: %d files read in %s", d.Name, n, time.Since(start).Round(time.Second))
 	return d.UUID, nil
 }
@@ -670,3 +673,79 @@ func hashFile(p string, read *atomic.Int64) (string, error) {
 type counter struct{ n *atomic.Int64 }
 
 func (c counter) Write(b []byte) (int, error) { c.n.Add(int64(len(b))); return len(b), nil }
+
+// followMoves keeps the check byte for byte of the clips moved or renamed by hand on the drive (in the Finder):
+// a clip gone from one path while one came at another, with the same sample, size and time, is that file moved,
+// as long as no more came than went and the ones gone had one full hash. A copy leaves its original behind, so a
+// copy is read again: that is what the check is for.
+func followMoves(dir string, before map[string]Rec) error {
+	type key struct {
+		hash, mtime string
+		size        int64
+	}
+	now, came := map[string]bool{}, map[key][]Rec{}
+	if err := eachRec(filepath.Join(dir, "files.jsonl"), func(r Rec) {
+		now[r.Path] = true
+		if _, was := before[r.Path]; !was && r.Hash != "" {
+			k := key{r.Hash, r.Mtime, r.Size}
+			came[k] = append(came[k], r)
+		}
+	}); err != nil {
+		return err
+	}
+	gone := map[key][]Rec{}
+	for p, r := range before {
+		if k := (key{r.Hash, r.Mtime, r.Size}); !now[p] && r.Hash != "" && len(came[k]) > 0 {
+			gone[k] = append(gone[k], r)
+		}
+	}
+	if len(gone) == 0 {
+		return nil
+	}
+	file := filepath.Join(dir, "fullhash.tsv")
+	f, err := os.Open(file)
+	if err != nil {
+		return nil // nothing checked on this drive yet
+	}
+	full, err := fullHashes(f)
+	f.Close()
+	if err != nil {
+		return err
+	}
+	unix := func(r Rec) int64 { t, _ := time.Parse(time.RFC3339, r.Mtime); return t.Unix() }
+	var lines []string
+	for k, g := range gone {
+		sums := map[string]bool{}
+		for _, r := range g {
+			sums[full[stamp(r.Path, r.Size, unix(r))]] = true
+		}
+		if len(sums) != 1 || sums[""] || len(came[k]) > len(g) {
+			continue
+		}
+		for sum := range sums {
+			for _, r := range came[k] {
+				lines = append(lines, sum+"\t"+stamp(r.Path, r.Size, unix(r)))
+			}
+		}
+	}
+	return appendLines(file, lines...)
+}
+
+// appendLines adds lines at the end of file, made if missing (fullhash.tsv: what is added stays valid for its
+// size and time, so lines are only ever appended).
+func appendLines(file string, lines ...string) error {
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	for _, l := range lines {
+		if l == "" {
+			continue
+		}
+		if _, err := fmt.Fprintln(f, l); err != nil {
+			f.Close()
+			return err
+		}
+	}
+	return f.Close()
+}

@@ -1,9 +1,16 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package main
 
-import "os"
+import (
+	"io"
+	"os"
+)
 
-// noCache: elsewhere a copy read back may come from the system's memory, so it does not count as checked.
-// ponytail: Windows has FILE_FLAG_NO_BUFFERING, with aligned reads; until then Duplicati reads the copy again.
+// Elsewhere a copy read back may come from the system's memory, so it does not count as checked.
 func noCache(*os.File) bool { return false }
+
+func openFromDrive(p string) (io.ReadCloser, bool, error) {
+	f, err := os.Open(p)
+	return f, false, err
+}

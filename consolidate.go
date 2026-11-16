@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -122,20 +123,25 @@ func copyChecked(from, to string, mtime time.Time, progress io.Writer) (orig, cp
 		return "", "", err
 	}
 	defer os.Remove(tmp.Name())
-	direct := noCache(tmp)
+	noCache(tmp) // what is written does not stay in the system's memory either
 	h := sha256.New()
 	_, err = io.Copy(io.MultiWriter(tmp, progress), io.TeeReader(in, h))
 	if err == nil {
 		err = tmp.Sync()
 	}
-	if err == nil {
-		_, err = tmp.Seek(0, 0)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", "", err
+	}
+	r, direct, err := openFromDrive(tmp.Name())
+	if err != nil {
+		return "", "", err
 	}
 	back := sha256.New()
-	if err == nil {
-		_, err = io.Copy(back, tmp)
-	}
-	if cerr := tmp.Close(); err == nil {
+	_, err = io.Copy(back, r)
+	if cerr := r.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
@@ -168,22 +174,9 @@ func copyChecked(from, to string, mtime time.Time, progress io.Writer) (orig, cp
 	return orig, cp, nil
 }
 
-// addHashes appends lines to the fullhash.tsv of drive id (as fullHash and carryHashes do).
+// addHashes appends lines to the fullhash.tsv of drive id.
 func (a *App) addHashes(id string, lines ...string) error {
-	f, err := os.OpenFile(filepath.Join(a.dir, "disks", filepath.Base(id), "fullhash.tsv"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	for _, l := range lines {
-		if l == "" {
-			continue
-		}
-		if _, err := fmt.Fprintln(f, l); err != nil {
-			f.Close()
-			return err
-		}
-	}
-	return f.Close()
+	return appendLines(filepath.Join(a.dir, "disks", filepath.Base(id), "fullhash.tsv"), lines...)
 }
 
 // consolidate starts the copy of what the drive lacks of a project, after checking it fits; it runs in the
@@ -280,7 +273,7 @@ func (a *App) runConsolidation(project, id, drive, mount string, todo []consCopy
 func (a *App) keepProject(project, id, drive string, copied int) {
 	c := a.catalog()
 	var ls []DecisionLine
-	changed, seen := 0, map[string]bool{}
+	seen, before := map[string]bool{}, map[string]int{} // the drives chosen before, and for how many clips
 	for _, cl := range c.list {
 		if cl.Project != project || seen[cl.Content] {
 			continue
@@ -293,7 +286,7 @@ func (a *App) keepProject(project, id, drive string, copied int) {
 			continue
 		}
 		if cur != "" {
-			changed++
+			before[c.device(strings.SplitN(cur, "|", 2)[0]).Name]++
 		}
 		ls = append(ls, DecisionLine{Content: cl.Content, Kind: "copy", Value: id + "|" + locs[i].ID})
 	}
@@ -304,8 +297,13 @@ func (a *App) keepProject(project, id, drive string, copied int) {
 		ls = ls[n:]
 	}
 	note := fmt.Sprintf("%s copied to %s: %d files", project, drive, copied)
-	if changed > 0 {
-		note = fmt.Sprintf("%s copied to %s: %d files; %d clips that had another drive chosen now keep it", project, drive, copied, changed)
+	if len(before) > 0 {
+		names := slices.Sorted(maps.Keys(before))
+		n := 0
+		for _, k := range names {
+			n += before[k]
+		}
+		note = fmt.Sprintf("%s is all on %s: %d files copied. For %d clips you had chosen %s: now this one counts", project, drive, copied, n, strings.Join(names, ", "))
 	}
 	if err != nil {
 		note = fmt.Sprintf("%s copied to %s: %d files; keeping it there for the whole project was not saved: %s", project, drive, copied, err)

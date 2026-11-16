@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -95,8 +96,35 @@ func TestConsolidate(t *testing.T) {
 	if c.decision("c:a").Copy != "A|Sanremo2026/Footage/a.mov" || c.decision("c:b").Copy != "A|Sanremo2026/Footage/b.mov" || c.decision("c:c").Copy != "" {
 		t.Fatalf("kept: a %q, b %q, c %q", c.decision("c:a").Copy, c.decision("c:b").Copy, c.decision("c:c").Copy)
 	}
-	if !strings.Contains(app.copyNote, "1 clips that had another drive chosen now keep it") {
+	if app.copyNote != "Sanremo2026 is all on T9: 2 files copied. For 1 clips you had chosen LaCie: now this one counts" {
 		t.Fatalf("note %q", app.copyNote)
+	}
+}
+
+// TestFollowMoves: a clip moved by hand on the drive keeps its check byte for byte; a copy made by hand is read
+// again, and so is a move when more came than went (which one is the copy cannot be told).
+func TestFollowMoves(t *testing.T) {
+	dir := t.TempDir()
+	rec := func(p, h string) Rec { return Rec{Path: p, Hash: h, Size: 9, Mtime: "2026-02-27T16:59:55Z"} }
+	var b strings.Builder
+	for _, r := range []Rec{rec("/V/moved/a.mxf", "a"), rec("/V/b.mxf", "b"), rec("/V/copy/b.mxf", "b"), rec("/V/x/c.mxf", "c"), rec("/V/y/c.mxf", "c")} {
+		j, _ := json.Marshal(r)
+		b.Write(append(j, '\n'))
+	}
+	must(t, os.WriteFile(filepath.Join(dir, "files.jsonl"), []byte(b.String()), 0o644))
+	at := time.Date(2026, 2, 27, 16, 59, 55, 0, time.UTC).Unix()
+	full := ""
+	for _, p := range []string{"/V/a.mxf", "/V/b.mxf", "/V/c.mxf"} {
+		full += "sum-" + filepath.Base(p) + "\t" + stamp(p, 9, at) + "\n"
+	}
+	must(t, os.WriteFile(filepath.Join(dir, "fullhash.tsv"), []byte(full), 0o644))
+	before := map[string]Rec{"/V/a.mxf": rec("/V/a.mxf", "a"), "/V/b.mxf": rec("/V/b.mxf", "b"), "/V/c.mxf": rec("/V/c.mxf", "c")}
+	must(t, followMoves(dir, before))
+	f, _ := os.Open(filepath.Join(dir, "fullhash.tsv"))
+	got, _ := fullHashes(f)
+	f.Close()
+	if got[stamp("/V/moved/a.mxf", 9, at)] != "sum-a.mxf" || got[stamp("/V/copy/b.mxf", 9, at)] != "" || got[stamp("/V/x/c.mxf", 9, at)] != "" {
+		t.Fatalf("checks after the moves: %v", got)
 	}
 }
 

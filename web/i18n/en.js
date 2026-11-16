@@ -634,7 +634,7 @@ I18N.words({
   "Sending {name} to the team": "Sending {name} to the team",
   "Copying {project} to {drive}: {done} of {total} files": "Copying {project} to {drive}: {done} of {total} files",
   "{project} copied to {drive}: {n} files": "{project} copied to {drive}: {n} files",
-  "{project} copied to {drive}: {n} files; {changed} clips that had another drive chosen now keep it": "{project} copied to {drive}: {n} files; {changed} clips that had another drive chosen now keep it",
+  "{project} is all on {drive}: {n} files copied. For {changed} clips you had chosen {before}: now this one counts": "{project} is all on {drive}: {n} files copied. For {changed} clips you had chosen {before}: now this one counts",
   "{project} copied to {drive}: {n} files; keeping it there for the whole project was not saved: {why}": "{project} copied to {drive}: {n} files; keeping it there for the whole project was not saved: {why}",
   "{project} on {drive}: {copied} files copied, {failed} not: {why}": "{project} on {drive}: {copied} files copied, {failed} not: {why}",
   "Not enough free space on the drive": "Not enough free space on the drive",
