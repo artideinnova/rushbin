@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -255,5 +256,32 @@ func TestFrees(t *testing.T) {
 	}
 	if got := frees(c, "P", "A", true); got != 0 {
 		t.Fatalf("with the backup frees %d, want 0", got)
+	}
+}
+
+// TestEmptyTrash: what a drive's trash holds is counted, then deleted for good only there: the rest of the drive
+// stays, and a drive not connected is refused.
+func TestEmptyTrash(t *testing.T) {
+	a, dir := t.TempDir(), t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(a, trash, "P"), 0o755))
+	must(t, os.WriteFile(filepath.Join(a, trash, "P", "x.mov"), []byte("12345"), 0o644))
+	must(t, os.WriteFile(filepath.Join(a, "keep.mov"), []byte("k"), 0o644))
+	c := &Catalog{byCont: map[string][]*Clip{}}
+	c.Devices = []*DeviceInfo{{Device: Device{UUID: "A", Name: "T9", Mount: a}, Online: true}, {Device: Device{UUID: "B", Name: "LaCie", Mount: "/Volumes/nowhere"}}}
+	app := &App{dir: dir, cat: c}
+	rec := httptest.NewRecorder()
+	app.trashes(rec, httptest.NewRequest("GET", "/api/trash", nil))
+	if got := strings.TrimSpace(rec.Body.String()); got != `[{"bytes":5,"drive":"T9","files":1,"uuid":"A"}]` {
+		t.Fatalf("trash listed as %s", got)
+	}
+	rec = httptest.NewRecorder()
+	app.emptyTrash(rec, httptest.NewRequest("POST", "/api/trash/empty", strings.NewReader(`{"uuid":"B"}`)))
+	if rec.Code != 409 {
+		t.Fatalf("emptied a drive not connected: %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	app.emptyTrash(rec, httptest.NewRequest("POST", "/api/trash/empty", strings.NewReader(`{"uuid":"A"}`)))
+	if rec.Code != 200 || dirExists(filepath.Join(a, trash)) || !fileExists(filepath.Join(a, "keep.mov")) {
+		t.Fatalf("empty: %d, trash still there %v, rest gone %v", rec.Code, dirExists(filepath.Join(a, trash)), !fileExists(filepath.Join(a, "keep.mov")))
 	}
 }
