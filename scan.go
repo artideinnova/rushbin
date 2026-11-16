@@ -172,7 +172,7 @@ func checkDuplicates(catalog, id, name string) error {
 		return err
 	}
 	say("%s: verifying %d possible duplicates with checksums", name, len(todo))
-	return fullHash(todo, filepath.Join(catalog, "disks", id, "fullhash.tsv"))
+	return fullHash(todo, filepath.Join(catalog, "disks", id, "fullhash.tsv"), nil)
 }
 
 // writeFile replaces path with data whole, through a file renamed over it: a reader at the same moment (the app
@@ -586,7 +586,8 @@ func validHashes(file string) (map[string]bool, error) {
 }
 
 // fullHash appends "sha256 \t path \t size \t mtime" to out for each file, reading 8 files at a time.
-func fullHash(paths []string, out string) error {
+// halt, when not nil, ends it early: what was read so far is kept.
+func fullHash(paths []string, out string, halt func() bool) error {
 	f, err := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -634,6 +635,9 @@ func fullHash(paths []string, out string) error {
 	}
 	go func() {
 		for _, p := range paths {
+			if halt != nil && halt() {
+				break
+			}
 			jobs <- p
 		}
 		close(jobs)

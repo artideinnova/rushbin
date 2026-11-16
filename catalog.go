@@ -640,6 +640,7 @@ type Group struct {
 	Made       string `json:"made,omitempty"` // what made it: the same footage on two drives, or the same export saved twice
 	BytesExtra int64  `json:"bytes_extra"`
 	Thumb      string `json:"thumb"`
+	Project    string `json:"project"` // the project most of its copies belong to: Duplicati groups by it
 	Decision
 	Locations []Location `json:"locations"`
 }
@@ -660,6 +661,12 @@ func (c *Catalog) group(content string) Group {
 	cs := c.byCont[content]
 	g := Group{Content: content, Name: cs[0].Name, Size: cs[0].Size, Copies: len(cs), Thumb: cs[0].Thumb, Made: cs[0].Made, Decision: c.decision(content)}
 	g.Locations = c.locations(content)
+	in := map[string]int{}
+	for _, cl := range cs {
+		if in[cl.Project]++; in[cl.Project] > in[g.Project] || in[cl.Project] == in[g.Project] && cl.Project < g.Project {
+			g.Project = cl.Project
+		}
+	}
 	hashes := map[string]bool{}
 	missing := false
 	for _, cl := range cs {
@@ -675,7 +682,7 @@ func (c *Catalog) group(content string) Group {
 	return g
 }
 
-// locations lists every copy of a content, shortest path first (the proposed copy to keep).
+// locations lists every copy of a content, shortest path first (an order to show them in, not a choice).
 func (c *Catalog) locations(content string) []Location {
 	cs := append([]*Clip{}, c.byCont[content]...)
 	sort.Slice(cs, func(i, j int) bool { return shorter(cs[i].ID, cs[j].ID) })

@@ -8,13 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -179,98 +180,372 @@ func (a *App) addHashes(id string, lines ...string) error {
 	return appendLines(filepath.Join(a.dir, "disks", filepath.Base(id), "fullhash.tsv"), lines...)
 }
 
-// consolidate starts the copy of what the drive lacks of a project, after checking it fits; it runs in the
-// background, one at a time, and the drive is read again at the end.
+// moveJob is the consolidation going on, or the last one until the page lets it go. It is kept in move.json, so a
+// pause, a drive unplugged or the app closed lose nothing: Made lists what this move wrote, and only that is what
+// Cancel takes away again.
+type moveJob struct {
+	Project string         `json:"project"`
+	To      string         `json:"to"`    // the drive's ID
+	Drive   string         `json:"drive"` // its name
+	Backup  bool           `json:"backup"`
+	State   string         `json:"state"` // running, paused, waiting (drive gone or app closed), done, cancelled
+	Files   int            `json:"files"`
+	Bytes   int64          `json:"bytes"`
+	Copied  int            `json:"copied"`
+	Failed  int            `json:"failed"`
+	Why     string         `json:"why,omitempty"`
+	Made    []madeFile     `json:"made"`
+	Dirs    []string       `json:"dirs,omitempty"`    // folders it made, each after the one holding it
+	Before  map[string]int `json:"before,omitempty"`  // clips that had another drive chosen, by drive name (keepProject)
+	Kept    bool           `json:"kept"`              // each clip of the project now keeps its copy on To
+	Changed int            `json:"changed,omitempty"` // Cancel: files changed since written, left where they are
+}
+
+type madeFile struct {
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+	Mtime int64  `json:"mtime"`
+}
+
+const moveFile = "move.json"
+
+// saveMove writes a.move down. Callers hold smu.
+func (a *App) saveMove() {
+	if a.move == nil {
+		os.Remove(filepath.Join(a.dir, moveFile))
+		return
+	}
+	j, _ := json.Marshal(a.move)
+	if err := writeFile(filepath.Join(a.dir, moveFile), j); err != nil {
+		log.Println("move.json:", err)
+	}
+}
+
+// loadMove takes up the move the app had when it closed: one still running then waits to be resumed or cancelled.
+func (a *App) loadMove() {
+	var m moveJob
+	if b, err := os.ReadFile(filepath.Join(a.dir, moveFile)); err != nil || json.Unmarshal(b, &m) != nil {
+		return
+	}
+	if m.State == "running" {
+		m.State, m.Why = "waiting", "closed"
+	}
+	a.move = &m
+}
+
+var errStopped = errors.New("stopped")
+
+// stopper counts the bytes written and stops the copy when the page paused or cancelled the move.
+type stopper struct {
+	n   *atomic.Int64
+	ctl *atomic.Int32 // 0 go on, 1 pause, 2 cancel
+}
+
+func (s stopper) Write(b []byte) (int, error) {
+	if s.ctl.Load() != 0 {
+		return 0, errStopped
+	}
+	s.n.Add(int64(len(b)))
+	return len(b), nil
+}
+
+// consolidate: {"project", "to", "backup", "dry"}. Dry answers what the move would copy and free, for the page to
+// ask; otherwise it starts it, one at a time, after checking it fits. Backup keeps the copies on the other drives
+// as the project's backup (the switch in Duplicati).
 func (a *App) consolidate(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Project, To string }
+	var b struct {
+		Project, To string
+		Backup, Dry bool
+	}
 	json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&b)
-	todo, offline, err := consolidation(a.catalog(), b.Project, b.To)
+	c := a.catalog()
+	todo, offline, err := consolidation(c, b.Project, b.To)
 	if err != nil {
 		http.Error(w, err.Error(), 409)
 		return
 	}
 	var need int64
-	for _, c := range todo {
-		need += c.Size
+	for _, t := range todo {
+		need += t.Size
 	}
-	dst := a.catalog().device(b.To)
-	if d, err := identifyVolume(dst.Mount); err == nil && need > d.Free {
+	dst, free := c.device(b.To), int64(-1)
+	if d, err := identifyVolume(dst.Mount); err == nil {
+		free = d.Free
+	}
+	out := map[string]any{"files": len(todo), "bytes": need, "offline": offline, "free": free, "frees": frees(c, b.Project, b.To, b.Backup)}
+	if b.Dry {
+		send(w, out)
+		return
+	}
+	if free >= 0 && need > free {
 		http.Error(w, "Not enough free space on the drive", 409)
 		return
 	}
-	a.smu.Lock()
-	busy := a.copyTo != ""
-	if !busy && len(todo) > 0 {
-		a.copyTo = dst.Mount
+	if len(todo) == 0 {
+		http.Error(w, "Nothing of the project is missing on that drive", 409)
+		return
 	}
-	a.smu.Unlock()
-	if busy {
+	if err := a.saveBackup(b.Project, b.Backup); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	a.smu.Lock()
+	if a.copyTo != "" || a.move != nil && (a.move.State == "paused" || a.move.State == "waiting") {
+		a.smu.Unlock()
 		http.Error(w, "A project is already being consolidated", 409)
 		return
 	}
-	if len(todo) > 0 {
-		go a.runConsolidation(b.Project, dst.UUID, dst.Name, dst.Mount, todo)
-	}
-	send(w, map[string]any{"files": len(todo), "bytes": need, "offline": offline})
+	a.move = &moveJob{Project: b.Project, To: dst.UUID, Drive: dst.Name, Backup: b.Backup, State: "running", Files: len(todo), Bytes: need}
+	a.copyTo = dst.Mount
+	a.moveCtl.Store(0)
+	a.saveMove()
+	a.smu.Unlock()
+	go a.runMove(todo)
+	send(w, out)
 }
 
-func (a *App) runConsolidation(project, id, drive, mount string, todo []consCopy) {
-	done := a.reading(mount)
-	defer done()
-	say := func(s string) {
-		a.smu.Lock()
-		a.copyNote = s
-		a.smu.Unlock()
-	}
-	var total, base int64 // the page estimates the time left from the bytes (one file can be 2 GB, the next 2 KB)
-	for _, c := range todo {
-		total += c.Size
-	}
-	a.copyDone.Store(0)
-	a.copyTotal.Store(total)
-	defer a.copyTotal.Store(0)
-	copied, failed, why := 0, 0, ""
-	for i, c := range todo {
-		say(fmt.Sprintf("Consolidating %s to %s: %d of %d files", project, drive, i+1, len(todo)))
-		t, _ := time.Parse(time.RFC3339, c.Mtime)
-		stop := a.reading(c.From)
-		orig, cp, err := copyChecked(c.From, c.To, t, counter{&a.copyDone})
-		stop()
-		if err == nil { // the check byte for byte is done: Duplicati does not read these two files again
-			a.addHashes(c.Dev, orig)
-			a.addHashes(id, cp)
-		}
-		base += c.Size
-		a.copyDone.Store(base) // a file skipped or cut short counts as done: what is left is what the estimate needs
-		if err != nil {
-			failed++
-			why = err.Error()
-			if !fileExists(mount) { // the drive went: the rest would fail too
-				failed += len(todo) - i - 1
-				break
-			}
+// frees: what the other drives would free once the project is on drive to: the copies elsewhere of each clip that
+// is there, or will be (it has a copy on a connected drive), less the backup when the project keeps one.
+func frees(c *Catalog, project, to string, backup bool) int64 {
+	var n int64
+	seen := map[string]bool{}
+	for _, cl := range c.list {
+		if cl.Project != project || seen[cl.Content] {
 			continue
 		}
-		copied++
-	}
-	a.smu.Lock()
-	if failed > 0 {
-		a.copyNote = fmt.Sprintf("%s on %s: %d files copied, %d not: %s", project, drive, copied, failed, why)
-	} else {
-		a.copyNote = fmt.Sprintf("%s consolidated to %s: %d files", project, drive, copied)
-		if a.after == nil {
-			a.after = map[string]func(){}
+		seen[cl.Content] = true
+		others, reaches := 0, false
+		for _, l := range c.locations(cl.Content) {
+			if l.Device != to {
+				others++
+			}
+			reaches = reaches || l.Device == to || l.Online
 		}
-		a.after[mount] = func() { a.keepProject(project, id, drive, copied) } // once the drive read shows the copies
+		if !reaches {
+			continue
+		}
+		if backup && others > 0 {
+			others--
+		}
+		n += int64(others) * cl.Size
 	}
-	a.copyTo = ""
-	a.enqueue(mount) // once, now: during the copy its own writes did not ask for it (App.changed)
-	a.smu.Unlock()
+	return n
 }
 
-// keepProject: the whole project is now on drive id, so each of its clips keeps the copy there, as "Keep on" in
-// Duplicati would choose; choices of another drive made before are replaced, and the note says how many.
-func (a *App) keepProject(project, id, drive string, copied int) {
+// moveControl: "pause", "resume", "cancel" the move, or "dismiss" the last one once done or cancelled.
+func (a *App) moveControl(w http.ResponseWriter, r *http.Request) {
+	var err error
+	switch r.PathValue("do") {
+	case "pause":
+		a.moveCtl.Store(1)
+	case "resume":
+		var todo []consCopy
+		if todo, err = a.resumeMove(); err == nil {
+			go a.runMove(todo)
+		}
+	case "cancel":
+		a.smu.Lock()
+		running := a.copyTo != ""
+		a.smu.Unlock()
+		if running {
+			a.moveCtl.Store(2) // runMove cancels once the file being copied stops
+		} else {
+			err = a.cancelMove()
+		}
+	case "dismiss":
+		a.smu.Lock()
+		if a.move != nil && (a.move.State == "done" || a.move.State == "cancelled") {
+			a.move = nil
+			a.saveMove()
+		}
+		a.smu.Unlock()
+	default:
+		http.Error(w, "unknown", 404)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	send(w, map[string]bool{"ok": true})
+}
+
+// resumeMove gets a paused or waiting move going again: what is still missing, less what this move already wrote
+// (the drive has not been read since).
+func (a *App) resumeMove() ([]consCopy, error) {
+	a.smu.Lock()
+	defer a.smu.Unlock()
+	m := a.move
+	if m == nil || a.copyTo != "" || m.State != "paused" && m.State != "waiting" {
+		return nil, errors.New("Nothing to resume")
+	}
+	todo, _, err := consolidation(a.catalog(), m.Project, m.To)
+	if err != nil {
+		return nil, err
+	}
+	made := map[string]bool{}
+	for _, f := range m.Made {
+		made[f.Path] = true
+	}
+	todo = slices.DeleteFunc(todo, func(c consCopy) bool { return made[c.To] && fileExists(c.To) })
+	m.State, m.Why, m.Files, m.Bytes = "running", "", m.Copied+len(todo), 0
+	for _, f := range m.Made {
+		m.Bytes += f.Size
+	}
+	for _, c := range todo {
+		m.Bytes += c.Size
+	}
+	a.copyTo = a.catalog().device(m.To).Mount
+	a.moveCtl.Store(0)
+	a.saveMove()
+	return todo, nil
+}
+
+func (a *App) runMove(todo []consCopy) {
+	a.smu.Lock()
+	m, mount := a.move, a.copyTo
+	a.smu.Unlock()
+	defer a.reading(mount)()
+	var total, base int64 // the page estimates the time left from the bytes (one file can be 2 GB, the next 2 KB)
+	dirs := map[string]bool{}
+	for _, c := range todo {
+		total += c.Size
+		dirs[filepath.Dir(c.To)] = true
+	}
+	cleanTmp(dirs) // what a copy cut short by the app closing left
+	a.copyDone.Store(0)
+	a.copyTotal.Store(total)
+	stop := stopper{&a.copyDone, &a.moveCtl}
+	for _, c := range todo {
+		if a.moveCtl.Load() != 0 {
+			break
+		}
+		made := missingDirs(filepath.Dir(c.To))
+		t, _ := time.Parse(time.RFC3339, c.Mtime)
+		done := a.reading(c.From)
+		orig, cp, err := copyChecked(c.From, c.To, t, stop)
+		done()
+		base += c.Size
+		a.copyDone.Store(base) // a file skipped counts as done: what is left is what the estimate needs
+		a.smu.Lock()
+		for _, d := range made {
+			if dirExists(d) {
+				m.Dirs = append(m.Dirs, d)
+			}
+		}
+		gone := false
+		switch {
+		case err == nil:
+			if st, e := os.Stat(c.To); e == nil {
+				m.Made = append(m.Made, madeFile{c.To, st.Size(), st.ModTime().Unix()})
+			}
+			m.Copied++
+		case errors.Is(err, errStopped):
+		case !dirExists(mount): // the drive went: the rest would fail too
+			m.State, m.Why, gone = "waiting", "drive", true
+		default:
+			m.Failed++
+			m.Why = err.Error()
+		}
+		a.saveMove()
+		a.smu.Unlock()
+		if err == nil { // the check byte for byte is done: Duplicati does not read these two files again
+			a.addHashes(c.Dev, orig)
+			a.addHashes(m.To, cp)
+		}
+		if gone {
+			break
+		}
+	}
+	ctl := a.moveCtl.Load()
+	a.smu.Lock()
+	switch {
+	case m.State == "waiting":
+	case ctl == 1:
+		m.State = "paused"
+	case ctl == 2:
+	default:
+		m.State = "done"
+		if m.Failed == 0 {
+			if a.after == nil {
+				a.after = map[string]func(){}
+			}
+			a.after[mount] = func() { a.keepProject(m.Project, m.To) } // once the drive read shows the copies
+		}
+	}
+	a.copyTo = ""
+	a.copyTotal.Store(0)
+	if ctl != 2 && m.State != "waiting" {
+		a.enqueue(mount) // once, now: during the copy its own writes did not ask for it (App.changed)
+	}
+	a.saveMove()
+	a.smu.Unlock()
+	if ctl == 2 {
+		if err := a.cancelMove(); err != nil {
+			log.Println("cancel move:", err)
+		}
+	}
+}
+
+// cancelMove takes away what the move wrote, each file only if it is still as written, the hidden ones a copy cut
+// short left, and the folders it made once empty: the drive is as before, nothing else is touched.
+func (a *App) cancelMove() error {
+	a.smu.Lock()
+	defer a.smu.Unlock()
+	m := a.move
+	if m == nil || m.State == "done" || m.State == "cancelled" {
+		return errors.New("Nothing to cancel")
+	}
+	d := a.catalog().device(m.To)
+	if !d.Online || !dirExists(d.Mount) {
+		return errors.New("Connect the drive to cancel")
+	}
+	dirs := map[string]bool{}
+	for _, f := range m.Made {
+		dirs[filepath.Dir(f.Path)] = true
+		if st, err := os.Lstat(f.Path); err == nil && st.Mode().IsRegular() && st.Size() == f.Size && st.ModTime().Unix() == f.Mtime {
+			os.Remove(f.Path)
+		} else if err == nil {
+			m.Changed++
+		}
+	}
+	for _, dir := range m.Dirs {
+		dirs[dir] = true
+	}
+	cleanTmp(dirs)
+	for i := len(m.Dirs) - 1; i >= 0; i-- {
+		os.Remove(m.Dirs[i]) // only an empty folder goes
+	}
+	m.State, m.Why = "cancelled", ""
+	a.saveMove()
+	a.enqueue(d.Mount)
+	return nil
+}
+
+// missingDirs lists the folders dir needs that are not there yet, each after the one holding it.
+func missingDirs(dir string) (out []string) {
+	for d := dir; !dirExists(d) && filepath.Dir(d) != d; d = filepath.Dir(d) {
+		out = append([]string{d}, out...)
+	}
+	return out
+}
+
+// cleanTmp removes in dirs the hidden files copyChecked writes into before naming them: left only by a copy
+// cut short when the app closed.
+func cleanTmp(dirs map[string]bool) {
+	for dir := range dirs {
+		ps, _ := filepath.Glob(filepath.Join(dir, ".*-rushbin-*"))
+		for _, p := range ps {
+			if st, err := os.Lstat(p); err == nil && st.Mode().IsRegular() {
+				os.Remove(p)
+			}
+		}
+	}
+}
+
+// keepProject: the whole project is now on drive id, so each of its clips keeps the copy there, as "Project drive"
+// in Duplicati would choose; choices of another drive made before are replaced, and the move says how many.
+func (a *App) keepProject(project, id string) {
 	c := a.catalog()
 	var ls []DecisionLine
 	seen, before := map[string]bool{}, map[string]int{} // the drives chosen before, and for how many clips
@@ -279,7 +554,7 @@ func (a *App) keepProject(project, id, drive string, copied int) {
 			continue
 		}
 		seen[cl.Content] = true
-		locs := c.locations(cl.Content) // shortest path first
+		locs := c.locations(cl.Content)
 		i := slices.IndexFunc(locs, func(l Location) bool { return l.Device == id })
 		cur := c.decision(cl.Content).Copy
 		if i < 0 || len(locs) < 2 || strings.HasPrefix(cur, id+"|") {
@@ -296,19 +571,13 @@ func (a *App) keepProject(project, id, drive string, copied int) {
 		_, err = a.saveDecisions(ls[:n])
 		ls = ls[n:]
 	}
-	note := fmt.Sprintf("%s consolidated to %s: %d files", project, drive, copied)
-	if len(before) > 0 {
-		names := slices.Sorted(maps.Keys(before))
-		n := 0
-		for _, k := range names {
-			n += before[k]
-		}
-		note = fmt.Sprintf("%s is all on %s: %d files copied. For %d clips you had chosen %s: now this is the project drive", project, drive, copied, n, strings.Join(names, ", "))
-	}
-	if err != nil {
-		note = fmt.Sprintf("%s consolidated to %s: %d files; it could not be saved as the project drive: %s", project, drive, copied, err)
-	}
 	a.smu.Lock()
-	a.copyNote = note
+	if m := a.move; m != nil && m.Project == project && m.To == id {
+		m.Before, m.Kept = before, err == nil
+		if err != nil {
+			m.Why = err.Error()
+		}
+		a.saveMove()
+	}
 	a.smu.Unlock()
 }

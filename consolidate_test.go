@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -88,16 +89,16 @@ func TestConsolidate(t *testing.T) {
 
 	// Once T9 is read again with the copies, each clip of the project keeps its copy there: a.mov was kept on the
 	// LaCie by an earlier choice, which changes; b.mov had none; c.mov is only on the LaCie, nothing to choose.
-	app := &App{dir: t.TempDir(), cat: c}
+	app := &App{dir: t.TempDir(), cat: c, move: &moveJob{Project: "Sanremo2026", To: "A", State: "done"}}
 	c.decide(DecisionLine{Content: "c:a", Kind: "copy", Value: "B|BILLBOARD - SANREMO 2026/Footage/a.mov"})
 	cl := &Clip{Device: "A", ID: "Sanremo2026/Footage/b.mov", Path: filepath.Join(a, "Sanremo2026", "Footage", "b.mov"), Project: "Sanremo2026", Content: "c:b", Size: 6}
 	c.list, c.byCont["c:b"] = append(c.list, cl), append(c.byCont["c:b"], cl)
-	app.keepProject("Sanremo2026", "A", "T9", 2)
+	app.keepProject("Sanremo2026", "A")
 	if c.decision("c:a").Copy != "A|Sanremo2026/Footage/a.mov" || c.decision("c:b").Copy != "A|Sanremo2026/Footage/b.mov" || c.decision("c:c").Copy != "" {
 		t.Fatalf("kept: a %q, b %q, c %q", c.decision("c:a").Copy, c.decision("c:b").Copy, c.decision("c:c").Copy)
 	}
-	if app.copyNote != "Sanremo2026 is all on T9: 2 files copied. For 1 clips you had chosen LaCie: now this is the project drive" {
-		t.Fatalf("note %q", app.copyNote)
+	if m := app.move; !m.Kept || len(m.Before) != 1 || m.Before["LaCie"] != 1 { // the page says: for 1 clip you had chosen LaCie
+		t.Fatalf("move after keeping the project: %+v", m)
 	}
 	if j, _ := json.Marshal((&Catalog{byCont: map[string][]*Clip{}}).Dups()); string(j) != "[]" { // the page reads .length
 		t.Fatalf("no duplicates as %s", j)
@@ -148,5 +149,111 @@ func TestCopyNoRescan(t *testing.T) {
 	app.copyTo = ""
 	if app.changed(filepath.Join(a, "P", "clip.mxf")); !app.queued[a] {
 		t.Fatal("a change on A after the copy is not read")
+	}
+}
+
+// TestMove: a move paused before it starts copies nothing; resumed, it copies what is missing into folders it makes;
+// cancelled, it takes away only what it wrote and is unchanged, the hidden file a copy cut short left, and its
+// folders once empty: what was on the drive before stays.
+func TestMove(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	c := &Catalog{byCont: map[string][]*Clip{}, files: map[string]Rec{}, dec: map[string]*Decision{}}
+	c.Devices = []*DeviceInfo{{Device: Device{UUID: "A", Name: "T9", Mount: a}, Online: true}, {Device: Device{UUID: "B", Name: "LaCie", Mount: b}, Online: true}}
+	mtime := time.Date(2026, 2, 27, 16, 59, 55, 0, time.UTC)
+	for i, rel := range []string{"P/x.mov", "P/Footage/y.mov", "P/Footage/z.mov"} {
+		dev, mount := "B", b
+		if i == 0 { // the project's folder on T9: where the rest goes
+			dev, mount = "A", a
+		}
+		p := filepath.Join(mount, filepath.FromSlash(rel))
+		must(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		must(t, os.WriteFile(p, []byte(rel), 0o644))
+		must(t, os.Chtimes(p, mtime, mtime))
+		c.files[p] = Rec{Path: p, Size: int64(len(rel)), Mtime: mtime.Format(time.RFC3339)}
+		cl := &Clip{Device: dev, ID: rel, Path: p, Project: "P", Content: "c:" + rel, Size: int64(len(rel))}
+		c.list, c.byCont[cl.Content] = append(c.list, cl), []*Clip{cl}
+	}
+	app := &App{dir: t.TempDir(), cat: c, queue: make(chan string, 8)}
+	todo, _, err := consolidation(c, "P", "A")
+	must(t, err)
+	app.move, app.copyTo = &moveJob{Project: "P", To: "A", Drive: "T9", State: "running", Files: len(todo)}, a
+	app.moveCtl.Store(1)
+	app.runMove(todo)
+	if m := app.move; m.State != "paused" || m.Copied != 0 || app.copyTo != "" {
+		t.Fatalf("paused before the first file: %+v", m)
+	}
+	if todo, err = app.resumeMove(); err != nil || len(todo) != 2 {
+		t.Fatalf("resume: %v, %d to copy", err, len(todo))
+	}
+	app.runMove(todo)
+	m := app.move
+	if m.State != "done" || m.Copied != 2 || len(m.Made) != 2 || !slices.Equal(m.Dirs, []string{filepath.Join(a, "P", "Footage")}) {
+		t.Fatalf("resumed: %+v", m)
+	}
+	m.State = "paused" // as if paused after these two: cancel takes them away
+	z := filepath.Join(a, "P", "Footage", "z.mov")
+	must(t, os.WriteFile(z, []byte("changed since"), 0o644))
+	must(t, os.WriteFile(filepath.Join(a, "P", "Footage", ".w.mov-rushbin-1"), []byte("half"), 0o644))
+	must(t, app.cancelMove())
+	left, _ := filepath.Glob(filepath.Join(a, "P", "Footage", "*"))
+	hidden, _ := filepath.Glob(filepath.Join(a, "P", "Footage", ".*"))
+	if m.State != "cancelled" || m.Changed != 1 || !slices.Equal(left, []string{z}) || len(hidden) != 0 || !fileExists(filepath.Join(a, "P", "x.mov")) {
+		t.Fatalf("cancelled: %+v, left %v %v", m, left, hidden)
+	}
+	must(t, os.Remove(z))
+	m.State = "paused"
+	must(t, app.cancelMove())
+	if dirExists(filepath.Join(a, "P", "Footage")) || !dirExists(filepath.Join(a, "P")) {
+		t.Fatal("the folder the move made stays once empty, or the project's own went")
+	}
+}
+
+// TestAutoVerify: the duplicates of a project the page stopped are not read; once it asks again, both copies are
+// read whole and their checksums kept.
+func TestAutoVerify(t *testing.T) {
+	a, b, dir := t.TempDir(), t.TempDir(), t.TempDir()
+	c := &Catalog{byCont: map[string][]*Clip{}, files: map[string]Rec{}, dec: map[string]*Decision{}}
+	c.Devices = []*DeviceInfo{{Device: Device{UUID: "A", Name: "T9", Mount: a}, Online: true}, {Device: Device{UUID: "B", Name: "LaCie", Mount: b}, Online: true}}
+	for _, d := range []struct{ id, mount string }{{"A", a}, {"B", b}} {
+		p := filepath.Join(d.mount, "P", "x.mov")
+		must(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		must(t, os.WriteFile(p, []byte("same"), 0o644))
+		must(t, os.MkdirAll(filepath.Join(dir, "disks", d.id), 0o755))
+		cl := &Clip{Device: d.id, ID: "P/x.mov", Path: p, Project: "P", Content: "c:x", Size: 4}
+		c.list, c.byCont["c:x"] = append(c.list, cl), append(c.byCont["c:x"], cl)
+	}
+	app := &App{dir: dir, cat: c, verifyNow: make(chan struct{}, 1)}
+	must(t, app.setVerify("P", false))
+	if app.autoVerify() {
+		t.Fatal("verified a project the page stopped")
+	}
+	must(t, app.setVerify("P", true))
+	if !app.autoVerify() {
+		t.Fatal("nothing verified once asked again")
+	}
+	for _, id := range []string{"A", "B"} {
+		if b, _ := os.ReadFile(filepath.Join(dir, "disks", id, "fullhash.tsv")); !strings.Contains(string(b), "P/x.mov") {
+			t.Fatalf("%s: no checksum kept: %q", id, b)
+		}
+	}
+}
+
+// TestFrees: a clip only on a drive not connected never reaches the drive chosen, so its copies free nothing.
+func TestFrees(t *testing.T) {
+	c := &Catalog{byCont: map[string][]*Clip{}, dec: map[string]*Decision{}}
+	c.Devices = []*DeviceInfo{{Device: Device{UUID: "A", Name: "T9"}, Online: true}, {Device: Device{UUID: "B", Name: "LaCie"}}, {Device: Device{UUID: "C", Name: "Old"}}}
+	add := func(dev, content string) {
+		cl := &Clip{Device: dev, ID: content + ".mov", Path: "/x/" + dev + "/" + content, Project: "P", Content: content, Size: 10}
+		c.list, c.byCont[content] = append(c.list, cl), append(c.byCont[content], cl)
+	}
+	add("A", "on-a") // on T9 already: its copy on LaCie frees
+	add("B", "on-a")
+	add("B", "off") // only on drives not connected: it stays where it is
+	add("C", "off")
+	if got := frees(c, "P", "A", false); got != 10 {
+		t.Fatalf("frees %d, want 10", got)
+	}
+	if got := frees(c, "P", "A", true); got != 0 {
+		t.Fatalf("with the backup frees %d, want 0", got)
 	}
 }

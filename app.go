@@ -39,33 +39,38 @@ type App struct {
 	mu  sync.RWMutex // guards cat
 	cat *Catalog
 
-	smu        sync.Mutex        // guards the fields below
-	mounted    map[string]string // drive ID → mount path, connected now
-	seen       map[string]string // mount path → drive ID ("" for volumes we never catalog)
-	pending    []Pending
-	ignored    map[string]bool
-	status     string
-	rev        int64  // counts the catalog reloads: the page reads the catalog again when it moves
-	background string // long work that does not stop the app, like the proxies for the team
-	signedOut  bool   // the team site no longer accepts this computer's token: the page asks to sign in again
-	dlDone     int64  // bytes of the model being downloaded so far (ensureModels)
-	dlErr      string // why the last model download failed, "" when it did not
-	unreadable []Pending
-	failed     map[string]bool // light copies that failed in this session: not tried again until restart (scanner only)
-	shareNow   chan struct{}   // a drive changed (name, place, options, gone): the scanner sends it to the team // drives this computer cannot identify, so cannot catalog: said, not skipped silently
-	step       int             // 1 reading, 2 duplicates, 3 previews, 4 analysis; 0 when idle
-	done       int64           // how far the step is: files, bytes or clips
-	total      int64           // 0 when not known in advance
-	queue      chan string
-	verifyNow  chan struct{}     // the page asked to check copies byte for byte (App.verify)
-	verifyFor  map[string]bool   // what it asked for: contents, and "" for the copies the trash waits for
-	busy       map[string]int    // mount path → reads of that drive going on now (App.reading)
-	queued     map[string]bool   // mount path → a scan of it waits in queue
-	copyTo     string            // the drive a project is being copied to (consolidate.go), "" when none
-	copyNote   string            // how that copy goes, or how the last one went
-	after      map[string]func() // what waits for the next reading of a drive (by mount): keepProject
-	copyDone   atomic.Int64      // bytes of that copy done, of copyTotal (0 when none runs): not guarded by smu
-	copyTotal  atomic.Int64
+	smu         sync.Mutex        // guards the fields below
+	mounted     map[string]string // drive ID → mount path, connected now
+	seen        map[string]string // mount path → drive ID ("" for volumes we never catalog)
+	pending     []Pending
+	ignored     map[string]bool
+	status      string
+	rev         int64  // counts the catalog reloads: the page reads the catalog again when it moves
+	background  string // long work that does not stop the app, like the proxies for the team
+	signedOut   bool   // the team site no longer accepts this computer's token: the page asks to sign in again
+	dlDone      int64  // bytes of the model being downloaded so far (ensureModels)
+	dlErr       string // why the last model download failed, "" when it did not
+	unreadable  []Pending
+	failed      map[string]bool // light copies that failed in this session: not tried again until restart (scanner only)
+	shareNow    chan struct{}   // a drive changed (name, place, options, gone): the scanner sends it to the team // drives this computer cannot identify, so cannot catalog: said, not skipped silently
+	step        int             // 1 reading, 2 duplicates, 3 previews, 4 analysis; 0 when idle
+	done        int64           // how far the step is: files, bytes or clips
+	total       int64           // 0 when not known in advance
+	queue       chan string
+	verifyNow   chan struct{}     // the page asked to check copies byte for byte (App.verify)
+	verifyFor   map[string]bool   // what it asked for: contents, and "" for the copies the trash waits for
+	busy        map[string]int    // mount path → reads of that drive going on now (App.reading)
+	queued      map[string]bool   // mount path → a scan of it waits in queue
+	copyTo      string            // the drive a project is being copied to (consolidate.go), "" when none
+	move        *moveJob          // that consolidation, or the last one until the page lets it go
+	moveCtl     atomic.Int32      // the page asks the move to pause (1) or cancel (2): not guarded by smu
+	verifying   string            // the project whose duplicates are being verified now (autoVerify)
+	verifyFirst string            // the project the page asked to verify before the others
+	verifyStop  atomic.Bool       // the page stopped the verification going on: not guarded by smu
+	verifyTried map[string]bool   // contents verified in this session that stay unverified (scanner only)
+	after       map[string]func() // what waits for the next reading of a drive (by mount): keepProject
+	copyDone    atomic.Int64      // bytes of that copy done, of copyTotal (0 when none runs): not guarded by smu
+	copyTotal   atomic.Int64
 
 	wmu    sync.Mutex // serializes decision writes and trash moves
 	lastID int64      // the team's last decision this Mac has (guarded by wmu)
@@ -166,6 +171,7 @@ func runApp(dir, addr string) error {
 	rand.Read(k)
 	a.token = hex.EncodeToString(k)
 	a.loadTeam()
+	a.loadMove()
 	if err := a.reload(); err != nil {
 		return err
 	}
@@ -211,11 +217,27 @@ func (a *App) routes() http.Handler {
 	m.HandleFunc("POST /api/decide", a.decide)
 	m.HandleFunc("POST /api/apply", a.apply)
 	m.HandleFunc("POST /api/consolidate", a.consolidate)
+	m.HandleFunc("POST /api/consolidate/{do}", a.moveControl)
+	m.HandleFunc("GET /api/trash", a.trashes)
+	m.HandleFunc("POST /api/trash/empty", a.emptyTrash)
 	// Check byte for byte: the copies of the contents named (from Duplicates), or none named, those the trash
 	// waits for (from Review).
+	// A project: {"project", "on": false} stops the verification of its duplicates, "on": true has it go first.
 	m.HandleFunc("POST /api/verify", func(w http.ResponseWriter, r *http.Request) {
-		var b struct{ Contents []string }
+		var b struct {
+			Contents []string
+			Project  *string
+			On       bool
+		}
 		json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&b)
+		if b.Project != nil {
+			if err := a.setVerify(*b.Project, b.On); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			send(w, map[string]bool{"ok": true})
+			return
+		}
 		a.smu.Lock()
 		if a.verifyFor == nil {
 			a.verifyFor = map[string]bool{}
@@ -479,6 +501,7 @@ type Move struct {
 	Name    string `json:"name"`
 	Disk    string `json:"disk"`
 	Reason  string `json:"reason"` // copy | discarded
+	Project string `json:"project,omitempty"`
 	From    string `json:"from"`
 	To      string `json:"to"`
 	Size    int64  `json:"size"`
@@ -497,7 +520,7 @@ func (a *App) plan() []Move {
 			continue
 		}
 		d := c.device(cl.Device)
-		m := Move{Content: cl.Content, Name: cl.Name, Disk: d.Name, Reason: "copy", From: cl.Path, Size: cl.Size, device: cl.Device}
+		m := Move{Content: cl.Content, Name: cl.Name, Disk: d.Name, Reason: "copy", Project: cl.Project, From: cl.Path, Size: cl.Size, device: cl.Device}
 		if dec.Vote == "discard" {
 			m.Reason = "discarded"
 		}
@@ -547,20 +570,27 @@ func (a *App) setBackup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", 400)
 		return
 	}
-	a.wmu.Lock()
-	defer a.wmu.Unlock()
-	on := a.backups()
-	if in.On {
-		on[in.Project] = true
-	} else {
-		delete(on, in.Project)
-	}
-	j, _ := json.Marshal(on)
-	if err := writeFile(filepath.Join(a.dir, backupsFile), j); err != nil {
+	if err := a.saveBackup(in.Project, in.On); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	send(w, on)
+	send(w, a.backups())
+}
+
+func (a *App) saveBackup(project string, on bool) error {
+	a.wmu.Lock()
+	defer a.wmu.Unlock()
+	all := a.backups()
+	if on == all[project] {
+		return nil
+	}
+	if on {
+		all[project] = true
+	} else {
+		delete(all, project)
+	}
+	j, _ := json.Marshal(all)
+	return writeFile(filepath.Join(a.dir, backupsFile), j)
 }
 
 // whyUnverified: a copy waits for the check byte for byte, which the page asks for (App.verify).
@@ -575,6 +605,10 @@ func (a *App) verify() {
 	want := a.verifyFor
 	a.verifyFor = nil
 	a.smu.Unlock()
+	if len(want) == 0 { // a project asked to go first (setVerify)
+		a.autoVerify()
+		return
+	}
 	if want[""] {
 		for _, m := range a.plan() {
 			if m.Why == whyUnverified {
@@ -582,8 +616,16 @@ func (a *App) verify() {
 			}
 		}
 	}
+	a.checkContents(slices.Collect(maps.Keys(want)), nil)
+	a.reload()
+	a.setStatus("")
+}
+
+// checkContents reads whole, drive by drive, every copy not verified yet of contents on a connected drive, until
+// stop says so.
+func (a *App) checkContents(contents []string, stop func() bool) {
 	c, byDrive := a.catalog(), map[string][]string{}
-	for content := range want {
+	for _, content := range contents {
 		for _, cl := range c.byCont[content] {
 			if cl.FullHash == "" && c.device(cl.Device).Online && fileExists(cl.Path) {
 				byDrive[cl.Device] = append(byDrive[cl.Device], cl.Path)
@@ -591,15 +633,148 @@ func (a *App) verify() {
 		}
 	}
 	for id, paths := range byDrive {
+		if stop != nil && stop() {
+			return
+		}
 		say("%s: verifying %d possible duplicates with checksums", c.device(id).Name, len(paths))
 		done := a.reading(paths[0])
-		if err := fullHash(paths, filepath.Join(a.dir, "disks", id, "fullhash.tsv")); err != nil {
+		if err := fullHash(paths, filepath.Join(a.dir, "disks", id, "fullhash.tsv"), stop); err != nil {
 			log.Printf("verify %s: %v", id, err)
 		}
 		done()
 	}
+}
+
+// autoVerify verifies, one project at a time, the duplicates not verified yet whose copies are all on connected
+// drives: the one the page asked for first, then the biggest saving first; not the projects the page stopped.
+// It says whether it had any to do. The scanner runs it when nothing else waits.
+func (a *App) autoVerify() bool {
+	off := a.verifyOff()
+	a.smu.Lock()
+	first := a.verifyFirst
+	a.verifyFirst = ""
+	if a.verifyTried == nil {
+		a.verifyTried = map[string]bool{}
+	}
+	tried := a.verifyTried
+	a.smu.Unlock()
+	var order []string
+	by := map[string][]string{}
+	for _, g := range a.catalog().Dups() { // biggest saving first
+		if g.Verified || g.Conflict || off[g.Project] || tried[g.Content] ||
+			slices.ContainsFunc(g.Locations, func(l Location) bool { return !l.Online }) {
+			continue
+		}
+		if by[g.Project] == nil {
+			order = append(order, g.Project)
+		}
+		by[g.Project] = append(by[g.Project], g.Content)
+	}
+	if len(order) == 0 {
+		return false
+	}
+	p := order[0]
+	if by[first] != nil {
+		p = first
+	}
+	a.smu.Lock()
+	a.verifying = p
+	a.smu.Unlock()
+	a.verifyStop.Store(false)
+	a.checkContents(by[p], a.verifyStop.Load)
+	if !a.verifyStop.Load() { // read whole: one still unverified now (unreadable, or another drive's copy) is not tried again
+		for _, content := range by[p] {
+			tried[content] = true
+		}
+	}
+	a.smu.Lock()
+	a.verifying = ""
+	a.smu.Unlock()
 	a.reload()
 	a.setStatus("")
+	return true
+}
+
+const verifyOffFile = "verify_off.json"
+
+// verifyOff: the projects whose duplicates the page stopped verifying.
+func (a *App) verifyOff() map[string]bool {
+	off := map[string]bool{}
+	if j, err := os.ReadFile(filepath.Join(a.dir, verifyOffFile)); err == nil {
+		json.Unmarshal(j, &off)
+	}
+	return off
+}
+
+// setVerify stops (on false) the verification of a project's duplicates, or has it go first (on true).
+func (a *App) setVerify(project string, on bool) error {
+	a.wmu.Lock()
+	off := a.verifyOff()
+	if on {
+		delete(off, project)
+	} else {
+		off[project] = true
+	}
+	j, _ := json.Marshal(off)
+	err := writeFile(filepath.Join(a.dir, verifyOffFile), j)
+	a.wmu.Unlock()
+	a.smu.Lock()
+	if on {
+		a.verifyFirst = project
+	} else if a.verifying == project {
+		a.verifyStop.Store(true)
+	}
+	a.smu.Unlock()
+	if on {
+		select {
+		case a.verifyNow <- struct{}{}:
+		default:
+		}
+	}
+	return err
+}
+
+// trashes: for each connected drive with files in its trash, how many and how big.
+func (a *App) trashes(w http.ResponseWriter, r *http.Request) {
+	out := []map[string]any{}
+	for _, d := range a.catalog().Devices {
+		if !d.Online || d.Mount == "" {
+			continue
+		}
+		n, size := 0, int64(0)
+		filepath.WalkDir(filepath.Join(d.Mount, trash), func(p string, e fs.DirEntry, err error) error {
+			if err == nil && e.Type().IsRegular() {
+				if st, err := e.Info(); err == nil {
+					n, size = n+1, size+st.Size()
+				}
+			}
+			return nil
+		})
+		if n > 0 {
+			out = append(out, map[string]any{"uuid": d.UUID, "drive": d.Name, "files": n, "bytes": size})
+		}
+	}
+	send(w, out)
+}
+
+// emptyTrash deletes for good the trash folder of a connected drive, {"uuid"}: the page asks first.
+func (a *App) emptyTrash(w http.ResponseWriter, r *http.Request) {
+	var b struct{ UUID string }
+	json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&b)
+	d := a.catalog().device(b.UUID)
+	if !d.Online || d.Mount == "" || !dirExists(d.Mount) {
+		http.Error(w, "Drive not connected", 409)
+		return
+	}
+	a.wmu.Lock()
+	defer a.wmu.Unlock()
+	if err := os.RemoveAll(filepath.Join(d.Mount, trash)); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	line, _ := json.Marshal(map[string]any{"t": time.Now().UTC().Format(time.RFC3339Nano), "emptied": d.UUID})
+	appendLines(filepath.Join(a.dir, "moves.jsonl"), string(line))
+	send(w, map[string]bool{"ok": true})
 }
 
 func (a *App) check(c *Catalog, m Move, mount string, cl *Clip, keep string) string {
@@ -636,13 +811,15 @@ func (a *App) check(c *Catalog, m Move, mount string, cl *Clip, keep string) str
 // apply moves into <drive>/_rushbin_trash what the plan allows (same volume: a rename, nothing is copied
 // or deleted), logs each move and queues a rescan of the drives touched.
 func (a *App) apply(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Project *string } // one project only, or all
+	json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&b)
 	a.wmu.Lock()
 	defer a.wmu.Unlock()
 	var moved, failed int
 	var bytes int64
 	touched := map[string]bool{}
 	for _, m := range a.plan() {
-		if !m.OK {
+		if !m.OK || b.Project != nil && m.Project != *b.Project {
 			continue
 		}
 		err := os.MkdirAll(filepath.Dir(m.To), 0o755)
@@ -717,7 +894,8 @@ func (a *App) statusHandler(w http.ResponseWriter, r *http.Request) {
 	paused, need, content := a.pause(false), a.modelsNeeded(), a.catalog().contentDone(filepath.Join(a.dir, "thumbs"))
 	a.smu.Lock()
 	defer a.smu.Unlock()
-	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev, "busy": slices.Collect(maps.Keys(a.busy)), "copy": a.copyNote, "copy_done": a.copyDone.Load(), "copy_total": a.copyTotal.Load(),
+	send(w, map[string]any{"status": a.status, "pending": append([]Pending{}, a.pending...), "step": a.step, "done": a.done, "total": a.total, "version": a.rev, "busy": slices.Collect(maps.Keys(a.busy)), "move": a.move, "copy_done": a.copyDone.Load(), "copy_total": a.copyTotal.Load(),
+		"verifying": a.verifying, "verify_off": a.verifyOff(),
 		"background": a.background, "unreadable": append([]Pending{}, a.unreadable...), "paused": paused, "content": content,
 		"models": map[string]any{"need": need, "done": a.dlDone, "error": a.dlErr}})
 }
@@ -1076,6 +1254,10 @@ func (a *App) scanner() {
 		if a.unsent > 0 {
 			a.unsent = 0
 			a.share()
+		}
+		// Duplicates verified with checksums, one project at a time, so Duplicati can free them.
+		if why == "" && a.autoVerify() {
+			continue
 		}
 		// One light copy for the team, then the rest again. With nothing to do, wait for a drive, or a
 		// minute (the team may have been connected, or the computer plugged in, meanwhile).
